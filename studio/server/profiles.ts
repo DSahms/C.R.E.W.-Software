@@ -100,19 +100,24 @@ export class ProfileStore {
   }
 
   /** If a Meta key exists, default every role to the meta provider unless the
-   * owner already picked something else. Fresh boots and new projects that
-   * inherit profiles.json get Meta without the preset dance. */
+   * owner already picked local. Roles stuck on cloud (from before Meta
+   * existed) are moved to Meta too — cloud without a key is a dead end. */
   private ensureMetaSelected() {
     if (!this.state) return;
     const hasKey = this.state.profiles.some(p => p.provider === "meta" && p.apiKey);
     if (!hasKey) return;
     this.state.selectedProviders ??= {};
+    let changed = false;
     for (const p of this.state.profiles) {
       if (p.provider !== "meta" || p.disabled) continue;
       const current = this.state.selectedProviders[p.role];
-      if (current !== "meta" && current !== undefined) continue;
-      this.state.selectedProviders[p.role] = "meta";
+      if (current === "local") continue; // owner explicitly chose local
+      if (current !== "meta") {
+        this.state.selectedProviders[p.role] = "meta";
+        changed = true;
+      }
     }
+    if (changed) this.persist();
   }
 
   /** Inject the saved Meta key from .env so profiles.json never has to carry it. */

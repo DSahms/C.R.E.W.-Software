@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import {
-  ArrowRight, Clipboard, FileUp, FileText, History,
+  ArrowRight, Clipboard, FileUp, FileText, FolderOpen, History,
   MessageSquare, Save, Sparkles, Upload,
 } from "lucide-vue-next";
 import ScreenHeader from "@/components/ScreenHeader.vue";
@@ -181,6 +181,49 @@ async function pasteFromClipboard() {
 
 function handleUploadClick() {
   uploadInput.value?.click();
+}
+
+// REA door: a picker plus a paste button — no typing required. A browser
+// file input can't hand back a real absolute path (sandbox), so the picker
+// records the chosen name and asks for the folder once via paste; if the
+// clipboard already holds a full path, one click fills it in.
+const reaInput = ref<HTMLInputElement | null>(null);
+
+function handleReaPickClick() {
+  reaInput.value?.click();
+}
+
+function handleReaFileChosen(ev: Event) {
+  const input = ev.target as HTMLInputElement;
+  const file = input.files?.[0];
+  if (!file) return;
+  // Best-effort: some browsers expose a fake path; keep the real name so
+  // the owner can confirm, and prefer a pasted full path when available.
+  existingTarget.value = (file as any).path || file.name;
+  mode.value = "existing";
+  saveDraft();
+  input.value = "";
+}
+
+function clearReaTarget() {
+  existingTarget.value = "";
+  if (reaInput.value) reaInput.value.value = "";
+  saveDraft();
+}
+
+async function pasteReaPath() {
+  try {
+    const text = (await navigator.clipboard.readText()).replace(/\s+/g, "").trim();
+    if (!text) {
+      alert("Clipboard is empty — copy the path in Explorer first (right-click the file, Copy as path).");
+      return;
+    }
+    existingTarget.value = text.replace(/^"|"$/g, "");
+    mode.value = "existing";
+    saveDraft();
+  } catch {
+    alert("Couldn't read the clipboard. Copy the path in Explorer first, then click Paste a path instead.");
+  }
 }
 
 const SUPPORTED_UPLOAD_RE = /\.(md|markdown|txt|text|pdf|doc|docx|rtf|csv|json|yaml|yml|jpg|jpeg|png|gif|webp|bmp|svg|heic|heif|tif|tiff)$/i;
@@ -420,13 +463,24 @@ const fmtTime = (iso: string | null) => {
           placeholder="e.g. How does its network scan work, and what would a minimal clone need?"
           @blur="saveDraft"
         ></textarea>
-        <div class="section-label" style="margin-top: 10px;">Absolute local path to the app or folder</div>
-        <input
-          type="text"
-          v-model="existingTarget"
-          placeholder="e.g. D:\tools\fing or D:\legacy\scanner"
-          @blur="saveDraft"
-        />
+        <div class="section-label" style="margin-top: 10px;">The app or folder</div>
+        <div v-if="!existingTarget" class="upload-zone" @click="handleReaPickClick">
+          <FolderOpen :size="22" />
+          <div>Click to pick the app or folder</div>
+          <div class="dim" style="font-size: 12px;">Opens a file picker — no typing needed. Or paste a path below.</div>
+        </div>
+        <div v-else class="upload-done">
+          <FolderOpen :size="16" />
+          <strong style="overflow-wrap: anywhere;">{{ existingTarget }}</strong>
+          <button class="btn btn-ghost btn-xs" @click="clearReaTarget">Remove</button>
+        </div>
+        <input ref="reaInput" type="file" accept=".exe,.msi,.apk,.jar,.py,.js,.ts,.zip" style="display:none" @change="handleReaFileChosen" />
+        <div class="paste-row" style="margin-top: 8px;">
+          <button class="btn btn-secondary" @click="pasteReaPath">
+            <Clipboard :size="14" /> Paste a path instead
+          </button>
+          <span class="dim" style="font-size: 12px;">Copied a path from Explorer? One click drops it in.</span>
+        </div>
         <div class="dim" style="font-size: 12px; margin-top: 4px;">Must be a full path on this machine. Relative paths and network drives are rejected.</div>
       </div>
 

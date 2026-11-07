@@ -106,6 +106,11 @@ async function handleUseMetaEverywhere(p: ConnectionProfile) {
   busy.value[key(p)] = "save";
   try {
     store.value = await useMetaEverywhere(p.role);
+    // The server flipped every role to meta — show the meta panel, not the
+    // stale cloud/local one, so the switch is visible instead of silent.
+    activeProvider.value = "meta";
+    const updated = store.value.profiles.find(x => x.role === activeRole.value && x.provider === "meta");
+    if (updated && testResult.value[key(updated)]) testResult.value[key(activeProfile.value ?? updated)] = testResult.value[key(updated)];
   } catch (error: any) { alert(error.message); }
   finally { busy.value[key(p)] = null; }
 }
@@ -395,12 +400,16 @@ const REASONING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "m
               </div>
             </div>
 
+            <div v-if="activeProfile.provider !== 'meta'" class="callout warn" style="margin-bottom: 10px;">
+              This role is on {{ activeProfile.provider === "cloud" ? "Cloud (Venice)" : "the local router" }}, not Meta. Your Meta key is saved — one click moves every role to it.
+            </div>
+
             <div class="action-row">
-              <button v-if="activeProfile.provider === 'meta'" class="btn btn-primary" :disabled="isBusy(activeProfile, 'save')" @click="handleUseMetaEverywhere(activeProfile)">
-                <Save :size="14" /> Use Meta for everything
+              <button class="btn btn-primary" :disabled="isBusy(activeProfile, 'save')" @click="handleUseMetaEverywhere(activeProfile)">
+                <Save :size="14" /> Switch all roles to Meta
               </button>
-              <button v-else class="btn btn-secondary" @click="handleApplyAll(activeProfile)">Use saved connection for all roles</button>
-              <button class="btn btn-primary" :disabled="isBusy(activeProfile, 'save')" @click="handleSave(activeProfile)">
+              <button v-if="activeProfile.provider !== 'meta'" class="btn btn-secondary" @click="handleApplyAll(activeProfile)">Use saved connection for all roles</button>
+              <button class="btn btn-secondary" :disabled="isBusy(activeProfile, 'save')" @click="handleSave(activeProfile)">
                 <Save :size="14" /> Save profile
               </button>
               <CheckCircle2 v-if="saveOk[key(activeProfile)]" :size="16" style="color: var(--green);" />
