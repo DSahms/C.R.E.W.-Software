@@ -1,9 +1,15 @@
 /**
  * Connection Profile Store — one saved profile per agent role.
  *
- * The "local" profile points at a KoboldCpp server at 127.0.0.1:5001 and
- * is the default for all roles and for all testing. The "cloud" profile
- * uses Venice AI; it is disabled until a `VENICE_API_KEY` exists in .env.
+ * The "local" profile points at the FreeLLMAPI router at 127.0.0.1:31415
+ * and is the default for all roles. KoboldCpp at 127.0.0.1:5001 is an
+ * optional preset that must never be probed automatically. The "cloud"
+ * profile uses Venice AI; it is disabled until a `VENICE_API_KEY` exists
+ * in .env.
+ *
+ * Pi requires the exact model ID. Never seed the router alias `auto`:
+ * it can resolve to a weak free model, and Pi model selection fails
+ * silently in that case.
  *
  * Profiles live in `<target>/.sssf/profiles.json` (gitignored). API keys
  * are never logged.
@@ -18,8 +24,28 @@ import type {
 } from "../shared/types.ts";
 
 const DEFAULT_LOCAL_URL = "http://127.0.0.1:31415/v1";
-const DEFAULT_LOCAL_MODEL = "auto";
-const DEFAULT_TOKEN_CAP = 20_000;
+/** Owner's cheap non-expiring key goes here: a first-class entry, not a preset lock-in. */
+const DEFAULT_META_URL = "https://api.meta.ai/v1";
+const DEFAULT_META_MODEL = "muse-spark-1.3-contributor";
+const DEFAULT_TOKEN_CAP = 1_000_000;
+
+const ROLE_MODEL_DEFAULTS: Record<string, string> = {
+  interviewer: "gpt-oss-120b",
+  planner: "gpt-oss-120b",
+  reviewer: "gpt-oss-120b",
+  scrutiny: "gpt-oss-120b",
+  validator: "gpt-oss-120b",
+  builder: "qwen3.8-27b",
+  documenter: "qwen3.8-27b",
+  scout: "qwen3.8-27b",
+  researcher: "qwen3.8-27b",
+  specialist: "qwen3.8-27b",
+  rea: "qwen3.8-27b",
+};
+
+function defaultModelForRole(role: string): string {
+  return ROLE_MODEL_DEFAULTS[role] ?? "gpt-oss-120b";
+}
 
 const KNOWN_ROLES: { role: string; label: string }[] = [
   { role: "planner", label: "Planner" },
@@ -66,8 +92,52 @@ export class ProfileStore {
     }
     if (!this.state) this.state = this.seedDefaults();
     this.mergeMissingRoles();
+    this.migrateAutoLocalModels();
     // Always ensure cloud profiles are disabled if no key present.
     this.syncCloudDisabled();
+    this.syncMetaKey();
+    this.ensureMetaSelected();
+  }
+
+  /** If a Meta key exists, default every role to the meta provider unless the
+   * owner already picked something else. Fresh boots and new projects that
+   * inherit profiles.json get Meta without the preset dance. */
+  private ensureMetaSelected() {
+    if (!this.state) return;
+    const hasKey = this.state.profiles.some(p => p.provider === "meta" && p.apiKey);
+    if (!hasKey) return;
+    this.state.selectedProviders ??= {};
+    for (const p of this.state.profiles) {
+      if (p.provider !== "meta" || p.disabled) continue;
+      const current = this.state.selectedProviders[p.role];
+      if (current !== "meta" && current !== undefined) continue;
+      this.state.selectedProviders[p.role] = "meta";
+    }
+  }
+
+  /** Inject the saved Meta key from .env so profiles.json never has to carry it. */
+  private syncMetaKey() {
+    if (!this.state) return;
+    const key = readMetaKey(this.dir);
+    if (!key) return;
+    for (const p of this.state.profiles) {
+      if (p.provider === "meta" && !p.apiKey) p.apiKey = key;
+    }
+  }
+
+  /** Pi needs an exact model ID. Migrate only saved local 31415 profiles
+   * that still carry the router alias `auto`; never touch a model the
+   * owner explicitly chose, and never touch cloud profiles. */
+  private migrateAutoLocalModels() {
+    if (!this.state) return;
+    let changed = false;
+    for (const p of this.state.profiles) {
+      if (p.provider === "local" && p.baseUrl.replace(/\/+$/, "") === DEFAULT_LOCAL_URL && p.model.trim().toLowerCase() === "auto") {
+        p.model = defaultModelForRole(p.role);
+        changed = true;
+      }
+    }
+    if (changed) this.persist();
   }
 
   /** Add seeded entries for roles introduced after a profiles file was first
@@ -99,7 +169,7 @@ export class ProfileStore {
       label: r.label,
       provider: "local",
       baseUrl: DEFAULT_LOCAL_URL,
-      model: DEFAULT_LOCAL_MODEL,
+      model: defaultModelForRole(r.role),
       apiKey: "none",
       reasoningLevel: "off",
       hideThinking: false,
@@ -117,6 +187,21 @@ export class ProfileStore {
         reasoningLevel: "off",
         hideThinking: false,
         disabled: true,
+      });
+    }
+    // Add Meta variants (owner's cheap non-expiring endpoint). Enabled with
+    // an empty key slot so the owner can paste once in Settings; never probed.
+    for (const r of KNOWN_ROLES) {
+      profiles.push({
+        role: r.role,
+        label: `${r.label} (meta)`,
+        provider: "meta",
+        baseUrl: DEFAULT_META_URL,
+        model: DEFAULT_META_MODEL,
+        apiKey: "",
+        reasoningLevel: "off",
+        hideThinking: false,
+        disabled: false,
       });
     }
     return { profiles, defaultTokenCap: DEFAULT_TOKEN_CAP };
@@ -137,6 +222,7 @@ export class ProfileStore {
 
   list(): ConnectionProfileStore {
     this.syncCloudDisabled();
+    this.syncMetaKey();
     return this.state!;
   }
 
@@ -159,13 +245,20 @@ export class ProfileStore {
   }
 
   connectionKey(input: { role?: string; provider?: string; apiKey: string }): string {
-    if (input.apiKey && !input.apiKey.startsWith("••••")) return input.apiKey.trim();
+    // Empty string = "use the saved key server-side". The masked placeholder
+    // (••••) must never leave the browser; treat it as empty too.
+    if (input.apiKey && !input.apiKey.startsWith("•") && !input.apiKey.startsWith("—")) return input.apiKey.trim();
     const saved = this.list().profiles.find(p => p.role === input.role && p.provider === input.provider);
-    return saved?.apiKey || "";
+    if (saved?.apiKey) return saved.apiKey;
+    // Fall back to .env so a key saved via Roster & API keys works for tests
+    // even when profiles.json was seeded before the key existed.
+    if (input.provider === "meta") return readMetaKey(this.dir) ?? "";
+    if (input.provider === "cloud") return readVeniceKey(this.dir) ?? "";
+    return "";
   }
 
   upsert(profile: ConnectionProfile): ConnectionProfileStore {
-    if (!profile || !KNOWN_ROLES.some(r => r.role === profile.role) || !["local", "cloud"].includes(profile.provider)) throw new Error("Choose a supported role and connection variant.");
+    if (!profile || !KNOWN_ROLES.some(r => r.role === profile.role) || !["local", "cloud", "meta"].includes(profile.provider)) throw new Error("Choose a supported role and connection variant.");
     const url = new URL(profile.baseUrl);
     if (!["http:", "https:"].includes(url.protocol) || !profile.model?.trim()) throw new Error("Use an HTTP endpoint and choose a model.");
     if (!this.state) this.state = this.seedDefaults();
@@ -177,8 +270,38 @@ export class ProfileStore {
     this.state.selectedProviders ??= {};
     this.state.selectedProviders[profile.role] = profile.provider;
     this.syncCloudDisabled();
+    this.syncMetaKeyIntoState();
     this.persist();
     return this.publicList();
+  }
+
+  /** One-click Meta: paste once on any Meta role, then Meta becomes the
+   * connection for every role. No preset save/apply needed. */
+  useMetaEverywhere(role: string): ConnectionProfileStore {
+    const source = this.list().profiles.find(p => p.role === role && p.provider === "meta");
+    if (!source) throw new Error("Open the Meta (cheap) tab first.");
+    if (!source.apiKey) throw new Error("Paste your Meta key first, then click Use Meta for everything.");
+    if (source.disabled) throw new Error("That Meta connection is disabled.");
+    for (const profile of this.state!.profiles) {
+      if (profile.provider !== "meta") continue;
+      Object.assign(profile, { baseUrl: source.baseUrl, model: source.model, apiKey: source.apiKey, reasoningLevel: source.reasoningLevel, hideThinking: source.hideThinking, disabled: source.disabled });
+      this.state!.selectedProviders ??= {};
+      this.state!.selectedProviders[profile.role] = "meta";
+    }
+    this.persist();
+    return this.publicList();
+  }
+
+  /** Copy a freshly saved .env Meta key into every Meta profile so the next
+   * test and run use it immediately, even if profiles.json was seeded empty. */
+  private syncMetaKeyIntoState() {
+    if (!this.state) return;
+    const key = readMetaKey(this.dir);
+    if (!key) return;
+    for (const p of this.state.profiles) {
+      if (p.provider === "meta") p.apiKey = key;
+    }
+    this.ensureMetaSelected();
   }
 
   setDefaultTokenCap(cap: number) {
@@ -256,6 +379,11 @@ export class ProfileStore {
   }
 }
 
+/** Owner's Meta key: META_API_KEY in .env (gitignored) or process env. Never in git, never logged. */
+function readMetaKey(ssfDir: string): string | null {
+  return readEnvKey(ssfDir, "META_API_KEY");
+}
+
 function readVeniceKey(ssfDir: string): string | null {
   // .sssf is at <target>/.sssf; .env is at <target>/.env
   const envPath = join(ssfDir, "..", ".env");
@@ -271,6 +399,23 @@ function readVeniceKey(ssfDir: string): string | null {
     }
   }
   return process.env.VENICE_API_KEY || null;
+}
+
+function readEnvKey(ssfDir: string, name: string): string | null {
+  const envPath = join(ssfDir, "..", ".env");
+  if (existsSync(envPath)) {
+    const text = readFileSync(envPath, "utf-8");
+    for (const line of text.split("\n")) {
+      const t = line.trim();
+      if (t.startsWith("#")) continue;
+      const i = t.indexOf("=");
+      if (i !== -1 && t.slice(0, i).trim() === name) {
+        const v = t.slice(i + 1).trim().replace(/^["']|["']$/g, "");
+        if (v) return v;
+      }
+    }
+  }
+  return process.env[name] || null;
 }
 
 /**

@@ -15,7 +15,11 @@ const docked = ref(false);
 let cleanup: (() => void) | null = null;
 let dockObserver: ResizeObserver | null = null;
 
-const total = computed(() => (tourActive.value === "firstrun" ? 3 : 6));
+const total = computed(() => {
+  if (tourActive.value === "firstrun" || tourActive.value === "setup") return 3;
+  if (tourActive.value === "job") return 6;
+  return 6;
+});
 
 async function attach() {
   cleanup?.();

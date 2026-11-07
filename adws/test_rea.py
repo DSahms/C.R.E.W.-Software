@@ -125,6 +125,11 @@ class ReaWorkflowTests(unittest.TestCase):
                     envelope.update(changed_files=["app.js", "test/app.test.js"], commit_message="Build demo")
                 elif role == "reviewer":
                     envelope.update(approved=True, findings=[{"requirement": "demo behavior", "met": True, "evidence": "app.js inspected"}], blocking=[])
+                elif role == "scrutiny":
+                    if workflow_main is adw_verify_sdlc:
+                        envelope.update(approved=True, findings=[{"requirement": "plan covers demo behavior", "met": True, "evidence": "specs/plan.md complete"}], blocking=[])
+                    else:
+                        envelope.update(approved=False, findings=[], blocking=[])
                 elif role == "documenter":
                     if workflow_main is adw_verify_sdlc:
                         diffs = list((root / "adws/adw_data/sessions").glob("*/context_handoff/changes.diff"))

@@ -57,13 +57,7 @@ function selectLegacy(a: ApprovalRecord) {
 
 <template>
   <div>
-    <ScreenHeader screen="history" hide-step>
-      <template #actions>
-        <button class="btn btn-secondary btn-sm" @click="load">
-          <RotateCcw :size="14" /> Refresh
-        </button>
-      </template>
-    </ScreenHeader>
+    <ScreenHeader screen="history" />
 
     <div class="history-grid">
       <div class="section-card list-side">

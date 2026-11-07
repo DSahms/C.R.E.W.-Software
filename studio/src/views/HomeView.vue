@@ -50,51 +50,42 @@ function draftHasContent(d?: DiscoverySessionState | null): boolean {
 
 <template>
   <div>
-    <ScreenHeader screen="home" hide-step>
-      <template #actions>
-        <button class="btn btn-primary" data-tour="home-new-job" @click="go('new-job')">
-          <Compass :size="16" />
-          New Job
-          <ArrowRight :size="14" />
-        </button>
-      </template>
-    </ScreenHeader>
+    <ScreenHeader screen="home" />
 
-    <!-- First-run nudge -->
-    <div v-if="showFirstRun" class="callout" style="margin-bottom: 18px;">
-      <strong>Welcome to C.R.E.W. Software.</strong>
-      What do you want to create today? Explain the idea; your crew helps turn it into a reviewed result.
-      Take a 30-second tour?
-      <button class="btn btn-ghost btn-xs" style="margin-left: 8px;" @click="startTour('firstrun')">Start tour</button>
-      <button class="btn btn-ghost btn-xs" @click="showFirstRun = false">Skip for now</button>
-    </div>
-    <div v-else-if="showTourPrompt" class="callout" style="margin-bottom: 18px;">
-      Want a quick walk-through of the main path?
-      <button class="btn btn-ghost btn-xs" style="margin-left: 8px;" @click="startTour('main')">Take the tour</button>
-      <button class="btn btn-ghost btn-xs" @click="showTourPrompt = false">Maybe later</button>
+    <!-- One hero: the single primary action. Draft resumes automatically. -->
+    <div class="hero-card" style="margin-bottom: 18px;">
+      <button class="btn btn-primary btn-lg" data-tour="home-new-job" @click="go('new-job')">
+        <Compass :size="18" />
+        {{ draftHasContent(draft) ? "Continue your job" : "Start a job" }}
+        <ArrowRight :size="16" />
+      </button>
+      <p class="dim" style="margin: 8px 0 0; font-size: 13px;">
+        {{ draftHasContent(draft) ? "Your draft is waiting where you left it." : "Describe it, answer a few questions, check, sign twice, take the zip." }}
+        <button class="btn btn-ghost btn-xs" style="margin-left: 6px;" @click="startTour('job')">See how it works</button>
+      </p>
     </div>
 
-    <!-- Main path -->
+    <!-- Main path: the 5-step ladder. -->
     <div class="home-grid">
       <button class="path-card" @click="go('new-job')" data-tour="home-new-job">
         <Compass :size="22" />
-        <div class="path-card-name">1. New Job</div>
-        <div class="path-card-desc">Describe what you want done. Talk it through, upload a file, or paste text.</div>
+        <div class="path-card-name">1. Describe + 2. Answer</div>
+        <div class="path-card-desc">Talk, dump, paste, or point — then answer the numbered questions.</div>
       </button>
       <button class="path-card" :disabled="!draftHasContent(draft)" @click="go('review-approve')">
         <ListChecks :size="22" />
-        <div class="path-card-name">2. Review &amp; Approve</div>
-        <div class="path-card-desc">Confirm each section, read what will happen, approve. Nothing runs without your approval.</div>
+        <div class="path-card-name">3. Check + 4. Sign twice</div>
+        <div class="path-card-desc">Confirm each section, then sign and add initials.</div>
       </button>
       <button class="path-card" :disabled="recentApprovals.length === 0" @click="go('run')">
         <PlayCircle :size="22" />
-        <div class="path-card-name">3. Run</div>
-        <div class="path-card-desc">Watch the job live. Pause or stop any time. Token usage is guarded.</div>
+        <div class="path-card-name">5. Run</div>
+        <div class="path-card-desc">Watch the job live. One halt button. Guarded.</div>
       </button>
       <button class="path-card" :disabled="recentRuns.length === 0" @click="go('results')">
         <CheckCircle2 :size="22" />
-        <div class="path-card-name">4. Results</div>
-        <div class="path-card-desc">See what changed, what passed, and what to do next.</div>
+        <div class="path-card-name">5. Take-home zip</div>
+        <div class="path-card-desc">One zip — program, spec, manuals, install notes.</div>
       </button>
     </div>
 
@@ -114,7 +105,7 @@ function draftHasContent(d?: DiscoverySessionState | null): boolean {
           </button>
         </div>
         <div v-else class="empty-state">
-          No draft yet. Click <strong>New Job</strong> to start one — drafts save themselves.
+          No draft yet. Click <strong>Start a job</strong> above — drafts save themselves.
         </div>
       </div>
 

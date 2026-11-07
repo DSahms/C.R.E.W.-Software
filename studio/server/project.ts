@@ -83,7 +83,62 @@ export class ProjectManager {
         if (path) changedFiles.push(path);
       }
     }
-    return { projectPath: this.targetDir, specs: [...collect("specs"), ...collect("requests")], changedFiles };
+    const bundle = this.latestBundle();
+    return { projectPath: this.targetDir, specs: [...collect("specs"), ...collect("requests")], changedFiles, ...bundle };
+  }
+
+  private latestBundle(): Pick<ProjectDeliverables, "bundlePath" | "bundleName" | "bundleBytes" | "bundleAt"> {
+    const dir = join(this.targetDir, ".sssf", "bundles");
+    if (!existsSync(dir)) return {};
+    const zips = readdirSync(dir).filter(name => name.endsWith("-crew-bundle.zip"));
+    if (!zips.length) return {};
+    const full = zips
+      .map(name => join(dir, name))
+      .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)[0];
+    const info = statSync(full);
+    return { bundlePath: full, bundleName: full.split(/[\\/]/).pop(), bundleBytes: info.size, bundleAt: info.mtime.toISOString() };
+  }
+
+  /** Pack the project into one droppable zip: program files, specs, manuals, install notes. */
+  buildBundle(): ProjectDeliverables {
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+    const base = basename(this.targetDir).replace(/[^A-Za-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "crew-project";
+    const bundleDir = join(this.targetDir, ".sssf", "bundles");
+    mkdirSync(bundleDir, { recursive: true });
+    const bundleName = `${base}-${stamp}-crew-bundle.zip`;
+    const bundlePath = join(bundleDir, bundleName);
+    const staging = join(bundleDir, `.staging-${stamp}`);
+    mkdirSync(staging, { recursive: true });
+    const copyIf = (from: string, to: string) => {
+      if (existsSync(from)) cpSync(from, to, { recursive: true });
+    };
+    // Program surface: single-file apps, docs, specs, app write-ups.
+    for (const name of readdirSync(this.targetDir)) {
+      if (/^(.+\.html|.+\.js|.+\.css|README\.md|LICENSE)$/i.test(name)) {
+        const from = join(this.targetDir, name);
+        if (statSync(from).isFile()) cpSync(from, join(staging, name));
+      }
+    }
+    copyIf(join(this.targetDir, "specs"), join(staging, "specs"));
+    copyIf(join(this.targetDir, "app_docs"), join(staging, "app_docs"));
+    copyIf(join(this.targetDir, "docs"), join(staging, "docs"));
+    // Factory manuals ship with every bundle so the zip stands alone.
+    copyIf(join(this.factoryRoot, "docs", "users-manual", "index.html"), join(staging, "manuals", "users-manual.html"));
+    copyIf(join(this.factoryRoot, "docs", "learners-manual", "index.html"), join(staging, "manuals", "learners-manual.html"));
+    writeFileSync(join(staging, "INSTALL.txt"),
+      `C.R.E.W. Software bundle — ${base} (${stamp})\n\n` +
+      `1. Unzip anywhere.\n` +
+      `2. Single-file .html apps open directly in a browser.\n` +
+      `3. manuals/users-manual.html explains operation; manuals/learners-manual.html explains setup.\n` +
+      `4. specs/ holds the approved specification; app_docs/ holds the agent write-up.\n`);
+    const zip = Bun.spawnSync(["powershell", "-NoProfile", "-Command",
+      `Compress-Archive -Path '${staging.replace(/'/g, "''")}/*' -DestinationPath '${bundlePath.replace(/'/g, "''")}' -Force`],
+      { cwd: this.targetDir, stdout: "ignore", stderr: "pipe" });
+    Bun.spawnSync(["powershell", "-NoProfile", "-Command", `Remove-Item -LiteralPath '${staging.replace(/'/g, "''")}' -Recurse -Force`], { cwd: this.targetDir, stdout: "ignore", stderr: "ignore" });
+    if (zip.exitCode !== 0) {
+      throw new Error(`Could not pack the bundle: ${zip.stderr?.toString().trim() || "zip failed"}`);
+    }
+    return this.getDeliverables();
   }
 
   saveQualityConfig(input: unknown): ProjectQualityState {

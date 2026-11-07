@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import {
-  Compass, FolderGit2, FolderOpen, GitBranch, History, Home,
-  LifeBuoy, ListChecks, PauseCircle, PlayCircle, Settings as SettingsIcon,
-  Sliders, Wrench, X, Sun, Moon, HelpCircle,
+  Compass, FolderGit2, GitBranch, Home,
+  ListChecks, PauseCircle, PlayCircle, Settings as SettingsIcon,
+  Wrench, Sun, Moon, HelpCircle, Sliders,
 } from "lucide-vue-next";
 import { ref } from "vue";
 import { nav, go, type ScreenId } from "@/lib/nav";
@@ -19,9 +19,11 @@ const emit = defineEmits<{
   (e: "open-help"): void;
 }>();
 
+/** Five steps only in the sidebar. Sessions/History live in Results footers;
+ * Settings/Help live in the top bar. One chain of command per screen. */
 const GROUPS: { label: string; items: { id: ScreenId; label: string; icon: any; tour?: string }[] }[] = [
   {
-    label: "Workflow",
+    label: "Steps",
     items: [
       { id: "home", label: "Home", icon: Home, tour: "nav-home" },
       { id: "new-job", label: "New Job", icon: Compass, tour: "nav-new-job" },
@@ -30,24 +32,17 @@ const GROUPS: { label: string; items: { id: ScreenId; label: string; icon: any; 
       { id: "results", label: "Results", icon: PauseCircle, tour: "nav-results" },
     ],
   },
-  {
-    label: "Observe",
-    items: [
-      { id: "sessions", label: "Sessions", icon: Sliders, tour: "nav-sessions" },
-      { id: "history", label: "History", icon: History, tour: "nav-history" },
-    ],
-  },
-  {
-    label: "Setup",
-    items: [
-      { id: "settings", label: "Settings", icon: SettingsIcon, tour: "nav-settings" },
-      { id: "help", label: "Help", icon: LifeBuoy, tour: "nav-help" },
-    ],
-  },
 ];
 
 function isActive(id: ScreenId): boolean {
   return nav.value.screen === id;
+}
+
+/** Crew drawer: power tools behind one button. Main column stays 5 steps. */
+const drawerOpen = ref(false);
+function goDrawer(screen: ScreenId) {
+  drawerOpen.value = false;
+  go(screen);
 }
 </script>
 
@@ -101,6 +96,23 @@ function isActive(id: ScreenId): boolean {
       <div class="topbar-right">
         <button
           class="tour-help-btn"
+          data-tour="nav-setup"
+          @click="go('settings')"
+          title="Setup — one staircase: paste key, test, use for everything"
+        >
+          <SettingsIcon :size="14" />
+          Setup
+        </button>
+        <button
+          class="tour-help-btn"
+          title="Crew controls — roster, runs, history"
+          @click="drawerOpen = !drawerOpen"
+        >
+          <Sliders :size="14" />
+          Controls
+        </button>
+        <button
+          class="tour-help-btn"
           data-tour="help-btn"
           @click="emit('open-help')"
           title="Help — restart the tour"
@@ -142,5 +154,39 @@ function isActive(id: ScreenId): boolean {
     <main class="app-main">
       <slot />
     </main>
+
+    <!-- CREW DRAWER — everything power-related, behind one button -->
+    <div v-if="drawerOpen" class="drawer-scrim" @click="drawerOpen = false" />
+    <aside v-if="drawerOpen" class="crew-drawer" aria-label="Crew controls">
+      <div class="drawer-head">
+        <strong>Crew controls</strong>
+        <button class="btn btn-ghost btn-xs" @click="drawerOpen = false">Close</button>
+      </div>
+      <p class="dim" style="font-size: 12.5px; margin: 0 0 10px;">
+        The 5 steps never need this. Open only to tune, inspect, or audit.
+      </p>
+      <button class="drawer-item" @click="goDrawer('sessions')">Sessions — full trace of every run</button>
+      <button class="drawer-item" @click="goDrawer('history')">History — approval audit log</button>
+      <button class="drawer-item" @click="goDrawer('settings')">Settings — full panels (roster, caps, checks)</button>
+      <button class="drawer-item" @click="goDrawer('help')">Help — tours, glossary, manuals</button>
+    </aside>
   </div>
 </template>
+
+<style scoped>
+.drawer-scrim {
+  position: fixed; inset: 0; background: rgba(0, 0, 0, 0.35); z-index: 60;
+}
+.crew-drawer {
+  position: fixed; top: 0; right: 0; bottom: 0; width: 300px; z-index: 61;
+  background: var(--panel); border-left: 1px solid var(--border);
+  padding: 16px; display: flex; flex-direction: column; gap: 8px;
+}
+.drawer-head { display: flex; align-items: center; justify-content: space-between; }
+.drawer-item {
+  text-align: left; padding: 10px 12px; font-size: 13px;
+  background: var(--surface); border: 1px solid var(--border-soft); border-radius: var(--radius-sm);
+  cursor: pointer; color: var(--text); font-family: var(--sans);
+}
+.drawer-item:hover { border-color: var(--accent); }
+</style>

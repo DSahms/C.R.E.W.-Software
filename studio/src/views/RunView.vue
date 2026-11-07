@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import {
-  ArrowRight, ExternalLink, Pause, Play, PlayCircle, Square,
-  Terminal, Zap, ShieldCheck, Activity,
+  ExternalLink, Pause, Play, PlayCircle, Square,
+  Terminal, ShieldCheck,
 } from "lucide-vue-next";
 import ScreenHeader from "@/components/ScreenHeader.vue";
 import {
@@ -106,59 +106,43 @@ function openResults() {
 
 <template>
   <div>
-    <ScreenHeader screen="run">
-      <template #actions>
-        <template v-if="currentRun?.status === 'running' || currentRun?.status === 'paused'">
-          <button v-if="currentRun.status === 'running' && !windowsHost" class="btn btn-secondary btn-sm" @click="handlePause">
-            <Pause :size="14" /> Pause
-          </button>
-          <button v-else-if="currentRun.status === 'paused'" class="btn btn-secondary btn-sm" @click="handleResume">
-            <Play :size="14" /> Resume
-          </button>
-          <button class="btn btn-danger btn-sm" @click="handleStop">
-            <Square :size="14" /> Stop
-          </button>
-          <span v-if="windowsHost" class="dim">Windows: use Stop to end a job.</span>
-        </template>
-        <button v-if="currentRun && currentRun.status !== 'running' && currentRun.status !== 'paused'" class="btn btn-primary btn-sm" @click="openResults">
-          See results <ArrowRight :size="14" />
-        </button>
-      </template>
-    </ScreenHeader>
+    <ScreenHeader screen="run" />
 
-    <!-- Approval banner -->
-    <div v-if="approval" class="callout" style="margin-bottom: 14px;">
-      <ShieldCheck :size="16" style="vertical-align: middle; margin-right: 6px;" />
-      <strong>Approved v{{ approval.specVersion }}</strong> by {{ approval.approvedBy }} — workflow {{ approval.workflowName }}.
-      The server will reject any run without this recorded approval.
-    </div>
-    <div v-else class="callout warn" style="margin-bottom: 14px;">
-      <ShieldCheck :size="16" style="vertical-align: middle; margin-right: 6px;" />
-      No approval selected. Go to Review &amp; Approve first — the server won't run anything without one.
-      <button class="btn btn-ghost btn-xs" style="margin-left: 8px;" @click="go('review-approve')">Go to Review</button>
+    <!-- Approval line: one quiet sentence, not a banner. -->
+    <div class="dim" style="font-size: 13px; margin-bottom: 14px;">
+      <ShieldCheck :size="14" style="vertical-align: middle; margin-right: 4px;" />
+      <span v-if="approval">Approved v{{ approval.specVersion }} by {{ approval.approvedBy }} — {{ approval.workflowName }}.</span>
+      <span v-else>No approval yet — <button class="btn btn-ghost btn-xs" @click="go('review-approve')">go to Review</button> first.</span>
     </div>
 
     <!-- Two columns: control + terminal -->
     <div class="run-grid">
       <div class="control-side">
         <div class="section-card">
-          <div class="section-label">Ready to run</div>
-          <div v-if="approval" style="font-size: 14px; line-height: 1.6;">
-            <strong>{{ approval.workflowName }}</strong>
-            <div class="dim" style="font-size: 12.5px; margin-top: 4px;">
-              "{{ approval.specTitle }}" (v{{ approval.specVersion }})
-            </div>
-          </div>
           <button
-            class="btn btn-primary"
-            style="margin-top: 12px; width: 100%;"
+            class="btn btn-primary btn-lg"
+            style="width: 100%;"
             :disabled="launching || !approval || currentRun?.status === 'running' || currentRun?.status === 'paused'"
             @click="handleLaunch"
             data-tour="run-launch"
           >
-            <PlayCircle :size="16" />
-            {{ launching ? "Spawning…" : "Run the approved job" }}
+            <PlayCircle :size="18" />
+            {{ launching ? "Starting…" : approval ? `Run — ${approval.workflowName}` : "Run the approved job" }}
           </button>
+          <p v-if="approval" class="dim" style="font-size: 12.5px; margin: 8px 0 0;">"{{ approval.specTitle }}" (v{{ approval.specVersion }})</p>
+          <!-- One Halt button: pause/resume live here, Stop only there. -->
+          <div v-if="currentRun?.status === 'running' || currentRun?.status === 'paused'" style="margin-top: 10px;">
+            <button v-if="currentRun.status === 'running' && !windowsHost" class="btn btn-secondary" style="width: 100%;" @click="handlePause">
+              <Pause :size="16" /> Halt — pause the job
+            </button>
+            <button v-else-if="currentRun.status === 'paused'" class="btn btn-secondary" style="width: 100%;" @click="handleResume">
+              <Play :size="16" /> Resume the job
+            </button>
+            <button class="btn btn-danger" style="width: 100%; margin-top: 8px;" @click="handleStop">
+              <Square :size="16" /> Stop for good
+            </button>
+            <span v-if="windowsHost" class="dim" style="font-size: 12px;">Windows: use Stop to end a job.</span>
+          </div>
         </div>
 
         <div class="section-card" style="margin-top: 14px;" data-tour="run-token-guard">
@@ -183,11 +167,9 @@ function openResults() {
           </p>
         </div>
 
-        <div class="section-card" style="margin-top: 14px;">
-          <div class="section-label">Run status</div>
-          <div v-if="currentRun" style="font-size: 13px;">
-            <div><span class="dim">Run ID:</span> <span class="mono">{{ currentRun.runId }}</span></div>
-            <div><span class="dim">ADW ID:</span> <span class="mono">{{ currentRun.adwId || "—" }}</span></div>
+        <details class="section-card" style="margin-top: 14px;">
+          <summary class="section-label" style="cursor: pointer;">Run details</summary>
+          <div v-if="currentRun" style="font-size: 13px; margin-top: 10px;">
             <div><span class="dim">Status:</span>
               <span class="badge" :class="currentRun.status === 'running' ? 'badge-amber' : currentRun.status === 'success' ? 'badge-green' : currentRun.status === 'paused' ? 'badge-blue' : 'badge-red'">
                 {{ currentRun.status }}
@@ -195,14 +177,15 @@ function openResults() {
               <span v-if="currentRun.stopReason" class="badge">{{ currentRun.stopReason }}</span>
             </div>
             <div v-if="currentRun.currentPhase"><span class="dim">Phase:</span> <span class="mono">{{ currentRun.currentPhase }}</span></div>
+            <div class="dim mono" style="font-size: 12px; margin-top: 6px;">{{ currentRun.runId }}{{ currentRun.adwId ? ` · ${currentRun.adwId}` : "" }}</div>
             <div v-if="currentRun.adwId">
               <button class="btn btn-ghost btn-xs" style="margin-top: 6px;" @click="openResults">
-                <ExternalLink :size="12" /> Open in Results / Sessions
+                <ExternalLink :size="12" /> Open in Results
               </button>
             </div>
           </div>
-          <div v-else class="dim" style="font-size: 13px;">No run yet. Click "Run the approved job" to start.</div>
-        </div>
+          <div v-else class="dim" style="font-size: 13px; margin-top: 10px;">No run yet.</div>
+        </details>
       </div>
 
       <div class="terminal-side">

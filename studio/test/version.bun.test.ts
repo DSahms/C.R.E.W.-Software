@@ -47,7 +47,7 @@ describe("/api/version endpoint", () => {
     const res = await fetch(`http://127.0.0.1:${PORT}/api/version`);
     expect(res.status).toBe(200);
     const data = await res.json();
-    expect(data).toEqual({ name: 'C.R.E.W. Software', version: '1.0.0' });
+    expect(data).toEqual({ name: 'C.R.E.W. Software', version: '1.0.1' });
     expect(res.headers.get('content-type')).toContain('application/json');
   });
 });

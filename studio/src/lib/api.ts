@@ -69,6 +69,8 @@ export const getProjectInfo = () => req<TargetProject>("/api/studio/project");
 export const createProject = (name: string) => req<TargetProject>("/api/studio/project/create", { method: "POST", body: JSON.stringify({ name }) });
 
 export const getProjectDeliverables = () => req<ProjectDeliverables>("/api/studio/project/deliverables");
+export const buildProjectBundle = () =>
+  req<ProjectDeliverables>("/api/studio/project/bundle", { method: "POST" });
 export const getProjectQuality = () => req<ProjectQualityState>("/api/studio/project/quality");
 export const saveProjectQuality = (config: QualityConfig) =>
   req<ProjectQualityState>("/api/studio/project/quality", {
@@ -213,6 +215,7 @@ export const createApproval = (body: {
   rawAttachment?: string;
   rawAttachmentName?: string;
   approvedBy: string;
+  initials: string;
   sections: { id: string; name: string }[];
   summary: ApprovalRecordV2["summary"];
   workflowId: string;
@@ -256,6 +259,7 @@ export const fetchModels = (baseUrl: string, apiKey: string, profile?: { role: s
     body: JSON.stringify({ baseUrl, apiKey, ...profile }),
   });
 export const applyConnectionToAll = (role: string, provider: string) => req<ConnectionProfileStore>("/api/studio/profiles/apply-all", { method: "POST", body: JSON.stringify({ role, provider }) });
+export const useMetaEverywhere = (role: string) => req<ConnectionProfileStore>("/api/studio/profiles/use-meta", { method: "POST", body: JSON.stringify({ role }) });
 
 export const testConnection = (baseUrl: string, model: string, apiKey: string, profile?: { role: string; provider: string }) =>
   req<TestConnectionResponse>("/api/studio/profiles/test", {

@@ -8,7 +8,7 @@ import {
 import ScreenHeader from "@/components/ScreenHeader.vue";
 import {
   fetchModels, getProfiles, getProjectQuality, saveProjectQuality, saveProfile,
-  setDefaultTokenCap, testConnection, applyConnectionToAll,
+  setDefaultTokenCap, testConnection, applyConnectionToAll, useMetaEverywhere,
 } from "@/lib/api";
 import type {
   ConnectionProfile, ConnectionProfileStore, FetchModelsResponse,
@@ -25,9 +25,10 @@ const QUALITY_FIELDS = [
 type QualityKey = typeof QUALITY_FIELDS[number]["key"];
 
 const store = ref<ConnectionProfileStore | null>(null);
-const tab = ref<"profiles" | "token" | "quality" | "roster">("profiles");
-const activeRole = ref<string>("");
-const activeProvider = ref<"local" | "cloud">("local");
+const tab = ref<"profiles">("profiles");
+const activeRole = ref<string>("interviewer");
+const activeProvider = ref<"local" | "cloud" | "meta">("meta");
+const advancedTab = ref<"roles" | "token" | "quality" | "roster">("roles");
 
 const fetchModelsResult = ref<Record<string, FetchModelsResponse>>({});
 const testResult = ref<Record<string, TestConnectionResponse>>({});
@@ -50,10 +51,14 @@ function fillQuality(state: ProjectQualityState) {
 onMounted(async () => {
   try {
     store.value = await getProfiles();
-    if (store.value.profiles.length) {
-      const first = store.value.profiles[0];
-      activeRole.value = first.role;
-      activeProvider.value = first.provider;
+    // Prefer the Meta interviewer profile when it exists (the happy path);
+    // otherwise fall back to the first saved profile.
+    const preferred = store.value.profiles.find(p => p.role === "interviewer" && p.provider === "meta")
+      ?? store.value.profiles.find(p => p.provider === "meta")
+      ?? store.value.profiles[0];
+    if (preferred) {
+      activeRole.value = preferred.role;
+      activeProvider.value = preferred.provider;
     }
   } catch (e) {
     console.error("Settings load failed:", e);
@@ -76,14 +81,14 @@ const activeProfile = computed<ConnectionProfile | null>(() => {
 const roles = computed(() => {
   if (!store.value) return [];
   const seen = new Set<string>();
-  const out: { role: string; label: string; providers: ("local" | "cloud")[] }[] = [];
+  const out: { role: string; label: string; providers: ("local" | "cloud" | "meta")[] }[] = [];
   for (const p of store.value.profiles) {
     if (!seen.has(p.role)) {
       seen.add(p.role);
       const providers = store.value.profiles
         .filter(x => x.role === p.role)
         .map(x => x.provider);
-      out.push({ role: p.role, label: p.label.replace(/ \(cloud\)$/, ""), providers });
+      out.push({ role: p.role, label: p.label.replace(/ \((cloud|meta)\)$/, ""), providers });
     }
   }
   return out;
@@ -96,6 +101,45 @@ async function handleApplyAll(p: ConnectionProfile) {
   if (!confirm("Use this saved connection and model for every role? You can change individual roles afterward.")) return;
   try { store.value = await applyConnectionToAll(p.role, p.provider); } catch (error: any) { alert(error.message); }
 }
+
+async function handleUseMetaEverywhere(p: ConnectionProfile) {
+  busy.value[key(p)] = "save";
+  try {
+    store.value = await useMetaEverywhere(p.role);
+  } catch (error: any) { alert(error.message); }
+  finally { busy.value[key(p)] = null; }
+}
+
+// Setup staircase: one click saves the pasted key, then tests the connection.
+// Green result means the job path below it will work.
+async function handleSetupAndTest(p: ConnectionProfile) {
+  busy.value[key(p)] = "save";
+  try {
+    const incoming = (keyBuffer.value[key(p)] ?? "").trim();
+    if (incoming && incoming !== "••••••••") {
+      store.value = await saveProfile({ ...p, apiKey: incoming });
+      keyBuffer.value[key(p)] = "";
+      showSecret.value[key(p)] = false;
+      const saved = store.value?.profiles.find(x => x.role === p.role && x.provider === p.provider);
+      if (saved) p = saved;
+    }
+  } catch (error: any) { alert(error.message); return; }
+  finally { busy.value[key(p)] = null; }
+  await handleTestConnection(p);
+}
+
+const connectionOk = computed(() => {
+  if (!activeProfile.value) return false;
+  return testResult.value[key(activeProfile.value)]?.ok === true;
+});
+
+const connectionLabel = computed(() => {
+  if (!activeProfile.value) return "";
+  const p = activeProfile.value;
+  if (p.provider === "meta") return `Meta · ${p.model}`;
+  if (p.provider === "local") return `local router · ${p.model}`;
+  return `cloud · ${p.model}`;
+});
 
 function maskedValue(p: ConnectionProfile): string {
   if (!p.apiKey || p.apiKey === "none") return "";
@@ -140,10 +184,13 @@ async function handleFetchModels(p: ConnectionProfile) {
 async function handleTestConnection(p: ConnectionProfile) {
   busy.value[key(p)] = "test";
   try {
+    // Never send the masked placeholder: an empty buffer means "use the saved
+    // key server-side". Sending •••••••• would fail auth every time.
+    const typed = (keyBuffer.value[key(p)] ?? "").trim();
     const res = await testConnection(
       p.baseUrl,
       p.model,
-      keyBuffer.value[key(p)] || p.apiKey,
+      typed || (typed === "" && !p.apiKey.startsWith("•") ? p.apiKey : ""),
       p,
     );
     testResult.value[key(p)] = res;
@@ -201,42 +248,98 @@ const REASONING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "m
 
 <template>
   <div>
-    <ScreenHeader screen="settings" hide-step />
+    <ScreenHeader screen="settings" />
 
     <div class="settings-tabs">
-      <button class="tab-btn" :class="{ active: tab === 'profiles' }" @click="tab = 'profiles'">Connection profiles</button>
-      <button class="tab-btn" :class="{ active: tab === 'token' }" @click="tab = 'token'">Token guard</button>
-      <button class="tab-btn" :class="{ active: tab === 'quality' }" @click="tab = 'quality'">Project checks</button>
-      <button class="tab-btn" :class="{ active: tab === 'roster' }" @click="tab = 'roster'">Roster &amp; API keys</button>
+      <button class="tab-btn" :class="{ active: tab === 'profiles' }" @click="tab = 'profiles'">Setup</button>
     </div>
 
-    <!-- PROFILES TAB -->
-    <div v-if="tab === 'profiles' && store">
-      <div class="profile-cols">
-        <div class="section-card role-list">
-          <div class="section-label">Roles</div>
-          <button
-            v-for="r in roles"
-            :key="r.role"
-            class="role-row"
-            :class="{ active: activeRole === r.role }"
-            @click="activeRole = r.role"
-          >
-            <Key :size="14" />
-            <span>{{ r.label }}</span>
-            <span class="badge" v-if="r.providers.includes('local')">local</span>
-            <span
-              class="badge"
-              v-if="r.providers.includes('cloud')"
-              :class="store.profiles.find(p => p.role === r.role && p.provider === 'cloud')?.disabled ? 'badge-red' : ''"
-            >cloud</span>
+    <!-- SETUP: status + key + test + one click. Advanced wiring below. -->
+    <div v-if="tab === 'profiles' && store && activeProfile">
+      <div class="section-card" style="max-width: 600px; margin-bottom: 14px;" data-tour="settings-connection">
+        <div class="section-label">Your connection</div>
+        <p class="dim" style="margin: 0 0 12px; font-size: 13px;">
+          <span v-if="connectionOk" style="color: var(--green);">Connected — {{ connectionLabel }}.</span>
+          <span v-else>Paste your key, then press Test. Green means you're set.</span>
+        </p>
+        <div class="field-row">
+          <input
+            :type="showSecret[key(activeProfile)] ? 'text' : 'password'"
+            :value="keyBuffer[key(activeProfile)] ?? maskedValue(activeProfile)"
+            @input="keyBuffer[key(activeProfile)] = ($event.target as HTMLInputElement).value"
+            :placeholder="activeProfile.provider === 'meta' ? 'paste your Meta key' : 'paste your key'"
+          />
+          <button class="btn btn-ghost btn-xs" @click="pasteKey(activeProfile)" title="Paste and trim">
+            <Clipboard :size="13" /> Paste
+          </button>
+          <button class="btn btn-ghost btn-xs" @click="showSecret[key(activeProfile)] = !showSecret[key(activeProfile)]" :title="showSecret[key(activeProfile)] ? 'Hide' : 'Show'">
+            <Eye v-if="!showSecret[key(activeProfile)]" :size="13" />
+            <EyeOff v-else :size="13" />
           </button>
         </div>
+        <div class="action-row">
+          <button class="btn btn-primary btn-lg" :disabled="isBusy(activeProfile, 'save') || isBusy(activeProfile, 'test')" @click="handleSetupAndTest(activeProfile)" data-tour="settings-save">
+            <Plug :size="16" /> {{ testResult[key(activeProfile)]?.ok ? "Connected — test again" : "Test connection" }}
+          </button>
+          <CheckCircle2 v-if="testResult[key(activeProfile)]?.ok" :size="18" style="color: var(--green);" />
+        </div>
+        <div v-if="testResult[key(activeProfile)]" class="test-result" :class="{ ok: testResult[key(activeProfile)]!.ok, err: !testResult[key(activeProfile)]!.ok }">
+          <component :is="testResult[key(activeProfile)]!.ok ? CheckCircle2 : AlertCircle" :size="14" />
+          <div>
+            <div style="font-weight: 600;">{{ testResult[key(activeProfile)]!.ok ? "Connected" : "Couldn't connect" }}</div>
+            <div class="dim" style="font-size: 12.5px;">{{ testResult[key(activeProfile)]!.message }}</div>
+          </div>
+        </div>
+        <div v-if="activeProfile.provider === 'meta'" style="margin-top: 12px;">
+          <button class="btn btn-primary" :disabled="isBusy(activeProfile, 'save')" @click="handleUseMetaEverywhere(activeProfile)">
+            <Save :size="14" /> Use Meta for everything
+          </button>
+          <div class="dim" style="font-size: 12px; margin-top: 6px;">
+            One click after the test goes green: all roles switch to this connection. No preset to name or apply.
+          </div>
+        </div>
+      </div>
 
-        <div class="section-card profile-detail">
-          <div v-if="activeProfile">
+      <details class="section-card" style="max-width: 720px;">
+        <summary class="section-label" style="cursor: pointer;">Advanced: per-role wiring</summary>
+        <p class="dim" style="font-size: 12.5px;">Each role can point at its own provider and model. Most people never need this — the connection above covers it.</p>
+        <div class="settings-tabs" style="margin-top: 10px;">
+          <button class="tab-btn" :class="{ active: advancedTab === 'roles' }" @click="advancedTab = 'roles'">Roles</button>
+          <button class="tab-btn" :class="{ active: advancedTab === 'token' }" @click="advancedTab = 'token'">Token guard</button>
+          <button class="tab-btn" :class="{ active: advancedTab === 'quality' }" @click="advancedTab = 'quality'">Project checks</button>
+          <button class="tab-btn" :class="{ active: advancedTab === 'roster' }" @click="advancedTab = 'roster'">Roster &amp; API keys</button>
+        </div>
+        <div v-if="advancedTab === 'roles'" class="profile-cols" style="margin-top: 12px;">
+          <div class="section-card role-list">
+            <div class="section-label">Roles</div>
+            <button
+              v-for="r in roles"
+              :key="r.role"
+              class="role-row"
+              :class="{ active: activeRole === r.role }"
+              @click="activeRole = r.role"
+            >
+              <Key :size="14" />
+              <span>{{ r.label }}</span>
+              <span class="badge" v-if="r.providers.includes('local')">local</span>
+              <span class="badge" v-if="r.providers.includes('meta')">meta</span>
+              <span
+                class="badge"
+                v-if="r.providers.includes('cloud')"
+                :class="store.profiles.find(p => p.role === r.role && p.provider === 'cloud')?.disabled ? 'badge-red' : ''"
+              >cloud</span>
+            </button>
+          </div>
+
+          <div class="section-card profile-detail">
             <div class="provider-tabs">
-              <button class="tab-btn" :class="{ active: activeProvider === 'local' }" @click="activeProvider = 'local'">Local (KoboldCpp)</button>
+              <button class="tab-btn" :class="{ active: activeProvider === 'local' }" @click="activeProvider = 'local'">Local (31415 router)</button>
+              <button
+                class="tab-btn"
+                :class="{ active: activeProvider === 'meta' }"
+                :disabled="!roles.find(r => r.role === activeRole)?.providers.includes('meta')"
+                @click="activeProvider = 'meta'"
+              >Meta (cheap)</button>
               <button
                 class="tab-btn"
                 :class="{ active: activeProvider === 'cloud' }"
@@ -248,10 +351,14 @@ const REASONING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "m
             <div v-if="activeProfile.provider === 'cloud' && activeProfile.disabled" class="callout warn" style="margin-bottom: 10px;">
               Cloud is disabled until a <code>VENICE_API_KEY</code> is set in <code>.env</code>.
             </div>
+            <div v-if="activeProfile.provider === 'meta'" class="callout" style="margin-bottom: 10px;">
+              Meta uses your cheap non-expiring key (<code>META_API_KEY</code> in <code>.env</code>, or paste below).
+              Base URL is <code>https://api.meta.ai/v1</code>, model <code>muse-spark-1.3-contributor</code> is preselected.
+            </div>
 
             <div class="field">
               <label class="field-label">Base URL</label>
-              <input type="text" v-model="activeProfile.baseUrl" placeholder="http://127.0.0.1:5001/v1" />
+              <input type="text" v-model="activeProfile.baseUrl" placeholder="http://127.0.0.1:31415/v1" />
             </div>
 
             <div class="field">
@@ -264,36 +371,11 @@ const REASONING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "m
                   <RefreshCw :size="13" :class="spinClass(activeProfile)" /> Fetch models
                 </button>
               </div>
-              <datalist id="models-list">
-                <option v-for="m in modelsDropdown[key(activeProfile)] ?? []" :key="m" :value="m" />
-              </datalist>
               <div v-if="fetchModelsResult[key(activeProfile)]?.error" class="dim" style="color: var(--red); font-size: 12px; margin-top: 4px;">
                 {{ fetchModelsResult[key(activeProfile)]!.error }}
               </div>
               <div v-else-if="fetchModelsResult[key(activeProfile)]?.models?.length" class="dim" style="font-size: 12px; margin-top: 4px;">
                 Found {{ fetchModelsResult[key(activeProfile)]!.models.length }} models. Pick from the dropdown.
-              </div>
-            </div>
-
-            <div class="field">
-              <label class="field-label">API key</label>
-              <div class="field-row">
-                <input
-                  :type="showSecret[key(activeProfile)] ? 'text' : 'password'"
-                  :value="keyBuffer[key(activeProfile)] ?? maskedValue(activeProfile)"
-                  @input="keyBuffer[key(activeProfile)] = ($event.target as HTMLInputElement).value"
-                  :placeholder="activeProfile.provider === 'local' ? 'none (local)' : 'paste your key'"
-                />
-                <button class="btn btn-ghost btn-xs" @click="pasteKey(activeProfile)" title="Paste and trim">
-                  <Clipboard :size="13" /> Paste
-                </button>
-                <button class="btn btn-ghost btn-xs" @click="showSecret[key(activeProfile)] = !showSecret[key(activeProfile)]" :title="showSecret[key(activeProfile)] ? 'Hide' : 'Show'">
-                  <Eye v-if="!showSecret[key(activeProfile)]" :size="13" />
-                  <EyeOff v-else :size="13" />
-                </button>
-              </div>
-              <div class="dim" style="font-size: 11.5px; margin-top: 4px;">
-                Saved keys stay in private project settings, excluded from Git. You don't need to retype them.
               </div>
             </div>
 
@@ -314,94 +396,82 @@ const REASONING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "m
             </div>
 
             <div class="action-row">
-              <button class="btn btn-secondary" @click="handleApplyAll(activeProfile)">Use saved connection for all roles</button>
-              <button class="btn btn-secondary" :disabled="isBusy(activeProfile, 'test')" @click="handleTestConnection(activeProfile)">
-                <Plug :size="14" /> Test connection
+              <button v-if="activeProfile.provider === 'meta'" class="btn btn-primary" :disabled="isBusy(activeProfile, 'save')" @click="handleUseMetaEverywhere(activeProfile)">
+                <Save :size="14" /> Use Meta for everything
               </button>
+              <button v-else class="btn btn-secondary" @click="handleApplyAll(activeProfile)">Use saved connection for all roles</button>
               <button class="btn btn-primary" :disabled="isBusy(activeProfile, 'save')" @click="handleSave(activeProfile)">
                 <Save :size="14" /> Save profile
               </button>
               <CheckCircle2 v-if="saveOk[key(activeProfile)]" :size="16" style="color: var(--green);" />
             </div>
+          </div>
+        </div>
 
-            <div v-if="testResult[key(activeProfile)]" class="test-result" :class="{ ok: testResult[key(activeProfile)]!.ok, err: !testResult[key(activeProfile)]!.ok }">
-              <component :is="testResult[key(activeProfile)]!.ok ? CheckCircle2 : AlertCircle" :size="14" />
-              <div>
-                <div style="font-weight: 600;">{{ testResult[key(activeProfile)]!.ok ? "Connected" : "Couldn't connect" }}</div>
-                <div class="dim" style="font-size: 12.5px;">{{ testResult[key(activeProfile)]!.message }}</div>
-                <div v-if="testResult[key(activeProfile)]!.detail" class="dim mono" style="font-size: 11px;">{{ testResult[key(activeProfile)]!.detail }}</div>
-              </div>
+        <div v-if="advancedTab === 'token' && store" style="margin-top: 12px;">
+          <div class="section-card" style="max-width: 500px;">
+            <div class="section-label">Default token cap</div>
+            <p class="dim" style="font-size: 13px; margin: 0 0 10px;">
+              Every new run starts with this cap. When usage reaches the cap, the run stops with a calm plain-language message. Default low so a runaway job can't drain your wallet.
+            </p>
+            <div class="field-row">
+              <input type="number" v-model.number="store.defaultTokenCap" min="1" step="1000" />
+              <button class="btn btn-primary" @click="handleSaveCap"><Save :size="14" /> Save</button>
+            </div>
+            <div class="dim" style="font-size: 12px; margin-top: 6px;">
+              Current: {{ store.defaultTokenCap.toLocaleString() }} tokens. Choose a positive whole number; reporting may overshoot by a turn.
             </div>
           </div>
         </div>
-      </div>
-    </div>
 
-    <!-- TOKEN GUARD TAB -->
-    <div v-if="tab === 'token' && store">
-      <div class="section-card" style="max-width: 500px;">
-        <div class="section-label">Default token cap</div>
-        <p class="dim" style="font-size: 13px; margin: 0 0 10px;">
-          Every new run starts with this cap. When usage reaches the cap, the run stops with a calm plain-language message. Default low so a runaway job can't drain your wallet.
-        </p>
-        <div class="field-row">
-          <input type="number" v-model.number="store.defaultTokenCap" min="1" step="1000" />
-          <button class="btn btn-primary" @click="handleSaveCap"><Save :size="14" /> Save</button>
-        </div>
-        <div class="dim" style="font-size: 12px; margin-top: 6px;">
-          Current: {{ store.defaultTokenCap.toLocaleString() }} tokens. Choose a positive whole number; reporting may overshoot by a turn.
-        </div>
-      </div>
-    </div>
+        <div v-if="advancedTab === 'quality'" style="margin-top: 12px;">
+          <div class="section-card" style="max-width: 720px;">
+            <div class="section-label" style="display: flex; align-items: center; gap: 6px;">
+              <ListChecks :size="15" /> Project checks
+            </div>
+            <p class="dim" style="font-size: 13px; margin: 0 0 10px;">
+              Quality Gate and the build pipelines run these commands instead of asking an agent to guess. Add the real commands for this project; a passing placeholder is worse than a missing check.
+            </p>
+            <div v-if="quality" class="mono dim" style="font-size: 11.5px; margin-bottom: 8px;">{{ quality.path }}</div>
+            <div v-if="qualityError" class="test-result err">
+              <AlertCircle :size="15" />
+              <div>{{ qualityError }}</div>
+            </div>
+            <div v-else-if="quality?.exists && quality.config && Object.keys(quality.config).length" class="test-result ok">
+              <CheckCircle2 :size="15" />
+              <div>Checks configured: {{ Object.keys(quality.config).join(", ") }}</div>
+            </div>
+            <div v-else class="test-result err">
+              <AlertCircle :size="15" />
+              <div>No checks configured yet. Quality Gate and full builds are blocked until you add at least one.</div>
+            </div>
+            <div v-if="quality?.error" class="test-result err" style="margin-top: 8px;">
+              <AlertCircle :size="15" />
+              <div>{{ quality.error }}</div>
+            </div>
 
-    <!-- PROJECT CHECKS TAB -->
-    <div v-if="tab === 'quality'">
-      <div class="section-card" style="max-width: 720px;">
-        <div class="section-label" style="display: flex; align-items: center; gap: 6px;">
-          <ListChecks :size="15" /> Project checks
-        </div>
-        <p class="dim" style="font-size: 13px; margin: 0 0 10px;">
-          Quality Gate and the build pipelines run these commands instead of asking an agent to guess. Add the real commands for this project; a passing placeholder is worse than a missing check.
-        </p>
-        <div v-if="quality" class="mono dim" style="font-size: 11.5px; margin-bottom: 8px;">{{ quality.path }}</div>
-        <div v-if="qualityError" class="test-result err">
-          <AlertCircle :size="15" />
-          <div>{{ qualityError }}</div>
-        </div>
-        <div v-else-if="quality?.exists && quality.config && Object.keys(quality.config).length" class="test-result ok">
-          <CheckCircle2 :size="15" />
-          <div>Checks configured: {{ Object.keys(quality.config).join(", ") }}</div>
-        </div>
-        <div v-else class="test-result err">
-          <AlertCircle :size="15" />
-          <div>No checks configured yet. Quality Gate and full builds are blocked until you add at least one.</div>
-        </div>
-        <div v-if="quality?.error" class="test-result err" style="margin-top: 8px;">
-          <AlertCircle :size="15" />
-          <div>{{ quality.error }}</div>
+            <div v-for="field in QUALITY_FIELDS" :key="field.key" class="field" style="margin-top: 12px;">
+              <label class="field-label" :for="`quality-${field.key}`">{{ field.label }} command</label>
+              <input
+                :id="`quality-${field.key}`"
+                v-model="qualityDraft[field.key]"
+                :placeholder="field.placeholder"
+                spellcheck="false"
+              />
+              <div class="dim" style="font-size: 11.5px; margin-top: 3px;">Paste a command (quote paths with spaces) or keep the saved argument list. Backslashes are preserved.</div>
+            </div>
+
+            <div class="action-row">
+              <button class="btn btn-primary" @click="handleSaveQuality"><Save :size="14" /> Save checks</button>
+              <span v-if="qualitySaved" class="badge badge-green">Saved</span>
+            </div>
+          </div>
         </div>
 
-        <div v-for="field in QUALITY_FIELDS" :key="field.key" class="field" style="margin-top: 12px;">
-          <label class="field-label" :for="`quality-${field.key}`">{{ field.label }} command</label>
-          <input
-            :id="`quality-${field.key}`"
-            v-model="qualityDraft[field.key]"
-            :placeholder="field.placeholder"
-            spellcheck="false"
-          />
-          <div class="dim" style="font-size: 11.5px; margin-top: 3px;">Paste a command (quote paths with spaces) or keep the saved argument list. Backslashes are preserved.</div>
+        <div v-if="advancedTab === 'roster'" style="margin-top: 12px;">
+          <ConfigView />
         </div>
-
-        <div class="action-row">
-          <button class="btn btn-primary" @click="handleSaveQuality"><Save :size="14" /> Save checks</button>
-          <span v-if="qualitySaved" class="badge badge-green">Saved</span>
-        </div>
-      </div>
-    </div>
-
-    <!-- ROSTER TAB (existing ConfigView) -->
-    <div v-if="tab === 'roster'">
-      <ConfigView />
+      </details>
     </div>
   </div>
 </template>

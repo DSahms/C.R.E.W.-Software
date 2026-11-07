@@ -6,7 +6,7 @@ import {
 } from "lucide-vue-next";
 import ScreenHeader from "@/components/ScreenHeader.vue";
 import {
-  fetchSession, getActiveRuns, getApproval, getProjectDeliverables,
+  buildProjectBundle, fetchSession, getActiveRuns, getApproval, getProjectDeliverables,
   getRunState, getWorkflows,
 } from "@/lib/api";
 import { fmtCost, fmtDuration, fmtTokens, ts } from "@/lib/format";
@@ -23,6 +23,8 @@ const workflows = ref<AdwWorkflowInfo[]>([]);
 const deliverables = ref<ProjectDeliverables | null>(null);
 const copiedPath = ref(false);
 const loading = ref(false);
+const bundling = ref(false);
+const bundleError = ref<string | null>(null);
 
 onMounted(async () => {
   loading.value = true;
@@ -59,6 +61,18 @@ async function copyProjectPath() {
   } catch { /* the path is visible and selectable if the clipboard is blocked */ }
 }
 
+async function downloadBundle() {
+  bundling.value = true;
+  bundleError.value = null;
+  try {
+    deliverables.value = await buildProjectBundle();
+  } catch (e: any) {
+    bundleError.value = e?.message ?? "Could not pack the bundle.";
+  } finally {
+    bundling.value = false;
+  }
+}
+
 const runMs = computed(() => {
   if (!run.value?.endedAt) return NaN;
   return ts(run.value.endedAt) - ts(run.value.startedAt);
@@ -71,42 +85,40 @@ const totalGates = computed(() => session.value?.gate_results?.length ?? 0);
 
 <template>
   <div>
-    <ScreenHeader screen="results">
-      <template #actions>
-        <button v-if="run?.adwId" class="btn btn-secondary btn-sm" @click="go('sessions', { adwId: run.adwId })">
-          <ExternalLink :size="14" /> Full trace
-        </button>
-        <button class="btn btn-primary btn-sm" @click="go('new-job')">
-          <PlayCircle :size="14" /> Start another job <ArrowRight :size="14" />
-        </button>
-      </template>
-    </ScreenHeader>
+    <ScreenHeader screen="results" />
 
     <div v-if="loading" class="dim">Loading…</div>
     <div v-else-if="!run" class="callout">
       No run yet. Start one from <button class="btn btn-ghost btn-xs" @click="go('run')">Run</button>.
     </div>
     <template v-else>
-      <div class="breadcrumbs">
-        <button @click="go('run')">Run</button>
-        <span class="crumb-sep">›</span>
-        <span class="crumb-current">Results — <span class="mono">{{ run.adwId || run.runId }}</span></span>
+
+      <!-- Take-home zip: the whole point of this screen. -->
+      <div v-if="deliverables?.bundlePath" class="hero-card" style="margin-bottom: 14px;">
+        <div class="section-label">Your finished bundle</div>
+        <div class="bundle-row">
+          <button class="btn btn-primary btn-lg" @click="downloadBundle" :disabled="bundling">
+            <FolderOpen :size="18" />
+            {{ bundling ? "Packing…" : deliverables.bundleName ? `Download ${deliverables.bundleName}` : "Pack the zip" }}
+          </button>
+        </div>
+        <div v-if="bundleError" class="callout warn" style="margin-top: 10px;">{{ bundleError }}</div>
+        <p class="dim" style="margin: 8px 0 0; font-size: 13px;">
+          Program, spec, both manuals, install notes — one zip, saved on this machine.
+          <button v-if="deliverables.bundlePath" class="btn btn-ghost btn-xs" style="margin-left: 6px;" @click="copyProjectPath">{{ copiedPath ? "Copied!" : "Copy path" }}</button>
+        </p>
       </div>
 
-      <!-- Status banner -->
-      <div class="status-banner" :class="run.status">
-        <component :is="run.status === 'success' ? CheckCircle2 : run.status === 'fail' ? XCircle : RotateCcw" :size="22" />
-        <div>
-          <div class="status-name">{{ run.status === 'success' ? 'Done' : run.status === 'fail' ? 'Failed' : run.status === 'stopped' ? 'Stopped' : 'Running' }}</div>
-          <div class="dim" style="font-size: 13px;">
-            {{ run.workflowName }}
-            <span v-if="run.stopReason === 'token-cap'">— stopped at the token cap</span>
-            <span v-else-if="run.stopReason === 'user-stop'">— stopped by you</span>
-          </div>
-        </div>
-        <div v-if="Number.isFinite(runMs)" class="status-time">
-          <Clock :size="14" /> {{ fmtDuration(runMs) }}
-        </div>
+      <!-- Status line: one quiet line, not a banner. -->
+      <div class="status-line" :class="run.status">
+        <component :is="run.status === 'success' ? CheckCircle2 : run.status === 'fail' ? XCircle : RotateCcw" :size="16" />
+        <span class="status-name">{{ run.status === 'success' ? 'Done' : run.status === 'fail' ? 'Failed' : run.status === 'stopped' ? 'Stopped' : 'Running' }}</span>
+        <span class="dim" style="font-size: 12.5px;">
+          {{ run.workflowName }}
+          <span v-if="run.stopReason === 'token-cap'">— stopped at the token cap</span>
+          <span v-else-if="run.stopReason === 'user-stop'">— stopped by you</span>
+          <span v-if="Number.isFinite(runMs)"> — {{ fmtDuration(runMs) }}</span>
+        </span>
       </div>
 
       <!-- Quick stats -->
@@ -134,34 +146,10 @@ const totalGates = computed(() => session.value?.gate_results?.length ?? 0);
         </div>
       </div>
 
-      <!-- Approval reference -->
-      <div v-if="approval" class="section-card" style="margin-top: 14px;">
-        <div class="section-label">Approved by</div>
-        <div style="display: flex; align-items: center; gap: 10px; font-size: 13.5px;">
-          <ListChecks :size="16" />
-          <strong>{{ approval.specTitle }}</strong> v{{ approval.specVersion }}
-          <span class="dim">by {{ approval.approvedBy }}</span>
-          <span class="dim">on {{ new Date(approval.approvedAt).toLocaleString() }}</span>
-        </div>
-      </div>
-
-      <!-- Phase summary -->
-      <div v-if="session?.phases?.length" class="section-card" style="margin-top: 14px;">
-        <div class="section-label">Phases</div>
-        <div class="phases-list">
-          <div v-for="p in session.phases" :key="p.phase_id" class="phase-row" :class="p.status ?? ''">
-            <span class="phase-seq">{{ p.seq ?? "·" }}</span>
-            <span class="phase-name">{{ p.name }}</span>
-            <span class="badge" :class="p.status === 'success' ? 'badge-green' : p.status === 'fail' ? 'badge-red' : p.status === 'running' ? 'badge-amber' : ''">{{ p.status }}</span>
-            <span class="dim" style="font-size: 12px;">{{ p.owner }}</span>
-          </div>
-        </div>
-      </div>
-
-      <!-- Deliverables -->
-      <div v-if="deliverables" class="section-card" style="margin-top: 14px;">
-        <div class="section-label">Deliverables</div>
-        <div class="deliverable-path">
+      <!-- Specs and changed files live in a collapsible; the zip is the headline. -->
+      <details v-if="deliverables" class="section-card" style="margin-top: 14px;">
+        <summary class="section-label" style="cursor: pointer;">What's inside the zip</summary>
+        <div class="deliverable-path" style="margin-top: 10px;">
           <FolderOpen :size="16" />
           <span class="mono">{{ deliverables.projectPath }}</span>
           <button class="btn btn-ghost btn-xs" @click="copyProjectPath">
@@ -190,50 +178,40 @@ const totalGates = computed(() => session.value?.gate_results?.length ?? 0);
         <div class="dim" style="font-size: 12px; margin-top: 8px;">
           Open the project folder in your file manager to use these files. Crew does not upload them anywhere.
         </div>
-      </div>
+      </details>
 
-      <!-- What to do next -->
+      <!-- What to do next: one quiet line, one button. -->
       <div class="section-card" style="margin-top: 14px;">
         <div class="section-label">What to do next</div>
-        <ul class="next-list">
-          <li v-if="run.status === 'success'">
-            <CheckCircle2 :size="14" /> The job finished cleanly. Open the full trace to inspect what changed.
-          </li>
-          <li v-if="run.status === 'fail'">
-            <XCircle :size="14" /> The job failed. Check the live console on the Run screen for the error, then start a smaller or clearer job.
-          </li>
-          <li v-if="run.stopReason === 'token-cap'">
-            <Zap :size="14" /> Hit the token cap. Raise it in Settings or approve a smaller spec, then run again.
-          </li>
-          <li>
-            <RotateCcw :size="14" /> Start another job from New Job. Drafts auto-save, so you won't lose your work.
-          </li>
-        </ul>
-        <div style="display: flex; gap: 8px; margin-top: 10px;">
-          <button v-if="run.adwId" class="btn btn-secondary btn-sm" @click="go('sessions', { adwId: run.adwId })">
-            <ExternalLink :size="14" /> Full trace
+        <p class="dim" style="margin: 0 0 10px; font-size: 13px;">
+          <span v-if="run.status === 'success'">The job finished cleanly — take the zip above.</span>
+          <span v-else-if="run.status === 'fail'">The job failed — check the live console on Run, then start a smaller or clearer job.</span>
+          <span v-else-if="run.stopReason === 'token-cap'">Hit the token cap — raise it in Settings or approve a smaller spec.</span>
+          <span v-else>Still running — watch it on Run.</span>
+          <button v-if="run.adwId" class="btn btn-ghost btn-xs" style="margin-left: 8px;" @click="go('sessions', { adwId: run.adwId })">
+            <ExternalLink :size="12" /> Full trace
           </button>
-          <button class="btn btn-primary btn-sm" @click="go('new-job')">
-            Start another job <ArrowRight :size="14" />
-          </button>
-        </div>
+        </p>
+        <button class="btn btn-primary" @click="go('new-job')">
+          Start another job <ArrowRight :size="14" />
+        </button>
       </div>
     </template>
   </div>
 </template>
 
 <style scoped>
-.status-banner {
-  display: flex; align-items: center; gap: 14px;
-  padding: 16px 18px; background: var(--panel); border: 1px solid var(--border);
-  border-left: 4px solid var(--accent); border-radius: var(--radius);
+.status-line {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px; background: var(--panel); border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm); font-size: 13.5px;
   margin-bottom: 14px;
 }
-.status-banner.success { border-left-color: var(--green); }
-.status-banner.fail { border-left-color: var(--red); }
-.status-banner.stopped { border-left-color: var(--amber); }
-.status-name { font-size: 18px; font-weight: 700; }
-.status-time { margin-left: auto; display: flex; align-items: center; gap: 4px; font-size: 13px; color: var(--dim); }
+.status-line.success { border-left: 3px solid var(--green); }
+.status-line.fail { border-left: 3px solid var(--red); }
+.status-line.stopped { border-left: 3px solid var(--amber); }
+.status-name { font-weight: 700; }
+.bundle-row { margin-top: 10px; }
 
 .stats-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; }
 .stat-card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 12px; }

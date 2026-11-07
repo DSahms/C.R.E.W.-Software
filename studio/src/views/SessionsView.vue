@@ -56,7 +56,7 @@ function clearSession() {
 
 <template>
   <div>
-    <ScreenHeader screen="sessions" hide-step />
+    <ScreenHeader screen="sessions" />
 
     <div class="breadcrumbs" aria-label="Breadcrumb">
       <button @click="clearSession">Sessions</button>

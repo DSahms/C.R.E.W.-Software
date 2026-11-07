@@ -1,0 +1,1 @@
+Push back on this plan. Read the plan in `<context_handoff_dir>/plan.md` and the approved spec, then rule on each requirement: covered, or missing with the exact gap. Report `approved` true only when the plan is complete and implementable without guessing. Findings go back to the planner.

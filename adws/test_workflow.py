@@ -54,6 +54,8 @@ class WorkflowTests(unittest.TestCase):
                     envelope.update(changed_files=["app.js", "test/app.test.js"], commit_message="Build demo")
                 elif role == "reviewer":
                     envelope.update(approved=True, findings=[{"requirement": "demo behavior", "met": True, "evidence": "app.js and test/app.test.js inspected in this simulated review"}], blocking=[])
+                elif role == "scrutiny":
+                    envelope.update(approved=True, findings=[{"requirement": "plan covers demo behavior", "met": True, "evidence": "specs/plan.md complete in this simulated scrutiny"}], blocking=[])
                 elif role == "documenter":
                     (root / "app_docs").mkdir(exist_ok=True)
                     file = root / "app_docs/usage.md"

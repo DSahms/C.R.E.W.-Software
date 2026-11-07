@@ -50,9 +50,10 @@ from adw_modules.data_types import (AgentCall, BuildOutput, ChangeCapture,
                                     DocumentOutput, PhaseParams, PlanOutput,
                                     ReviewOutput)
 
-REQUIRED_AGENTS = ["planner", "builder", "reviewer", "documenter"]
+REQUIRED_AGENTS = ["planner", "builder", "reviewer", "documenter", "scrutiny"]
 MAX_FIX_LOOPS = 3
 MAX_REVISION_LOOPS = 2
+MAX_SCRUTINY_LOOPS = 1
 
 DOCUMENT_NOTES = ("Read diff_path in full before writing. Document only what the "
                   "diff shows, then copy the write-up into app_docs/ as your task "
@@ -90,6 +91,21 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
         with run.phase(PhaseParams(name="commit_plan", kind="code", owner="git",
                                    description="Put the spec on record before any code exists to blur it")) as ph:
             commit(ph, plan)
+
+    scrutiny = None
+    for i in range(1, MAX_SCRUTINY_LOOPS + 1):
+        with run.phase(PhaseParams(name=f"scrutiny_{i}", kind="agent", owner="scrutiny",
+                                   description="Challenge the plan before the builder spends tokens on it")) as ph:
+            scrutiny = ph.call(AgentCall(output_type=ReviewOutput, prompt=prompt, previous=plan,
+                                         gates=[gates.artifacts_exist, gates.verdict_consistent]))
+
+        if scrutiny.approved or i == MAX_SCRUTINY_LOOPS:
+            break
+
+        with run.phase(PhaseParams(name=f"replan_{i}", kind="agent", owner="planner", retries=1,
+                                   description="Close the scrutiny findings before any code is written")) as ph:
+            plan = ph.call(AgentCall(output_type=PlanOutput, prompt=prompt, previous=scrutiny,
+                                     gates=[gates.artifacts_exist, gates.files_non_empty]))
 
     with run.phase(PhaseParams(name="build", kind="agent", owner="builder",
                                description="Implement the plan exactly")) as ph:

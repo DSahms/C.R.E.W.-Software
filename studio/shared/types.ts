@@ -238,6 +238,10 @@ export interface ProjectDeliverables {
   projectPath: string;
   specs: DeliverableFile[];
   changedFiles: string[];
+  bundlePath?: string;
+  bundleName?: string;
+  bundleBytes?: number;
+  bundleAt?: string;
 }
 
 export interface TargetProject {
@@ -455,6 +459,9 @@ export interface ApprovalRecordV2 {
   approvedBy: string;
   approvedAt: string;
   withdrawnAt?: string;
+  /** Second leg of the two-signoff gate: typed or drawn initials with timestamp. */
+  initials?: string;
+  initialsAt?: string;
   sections: ApprovalSection[];
   summary: {
     willHappen: string;
@@ -484,7 +491,7 @@ export interface ApprovalBookSummary {
 
 // ── Connection Profiles ────────────────────────────────────────────────────
 
-export type ProviderKind = "local" | "cloud";
+export type ProviderKind = "local" | "cloud" | "meta";
 
 export interface ConnectionProfile {
   role: string;

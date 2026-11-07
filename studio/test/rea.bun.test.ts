@@ -9,7 +9,7 @@ import { WorkflowLauncher } from "../server/launcher";
 import { parseArgv } from "../shared/command-argv";
 
 const target = mkdtempSync(join(tmpdir(), "crew-rea-"));
-const approvalInput = { specMarkdown: "# Goal\nTrace the legacy export", specTitle: "rea-probe", approvedBy: "test", sections: [{ id: "goal", name: "Goal" }], summary: { willHappen: "test", willUse: "stub", willNotDo: "calls", timeEstimate: "unknown", costEstimate: "none", canUndo: "yes", cannotBeUndone: "no" }, workflowId: "adw_simple_sdlc_rea.py", workflowName: "Investigate, Then Build", promptPreview: "test" } as any;
+const approvalInput = { specMarkdown: "# Goal\nTrace the legacy export", specTitle: "rea-probe", approvedBy: "test", initials: "TE", sections: [{ id: "goal", name: "Goal" }], summary: { willHappen: "test", willUse: "stub", willNotDo: "calls", timeEstimate: "unknown", costEstimate: "none", canUndo: "yes", cannotBeUndone: "no" }, workflowId: "adw_simple_sdlc_rea.py", workflowName: "Investigate, Then Build", promptPreview: "test" } as any;
 
 describe("REA workflow registration", () => {
   test("quality launch rejects missing required commands before any process starts", async () => {
@@ -72,11 +72,15 @@ describe("REA workflow registration", () => {
 });
 
 describe("REA connection profile", () => {
-  test("fresh stores seed a rea role with local and cloud variants", () => {
+  test("fresh stores seed a rea role with local, meta, and cloud variants", () => {
     const store = new ProfileStore(target);
     const roles = store.list().profiles.map(p => `${p.role}:${p.provider}`);
     expect(roles).toContain("rea:local");
+    expect(roles).toContain("rea:meta");
     expect(roles).toContain("rea:cloud");
+    const meta = store.list().profiles.find(p => p.role === "rea" && p.provider === "meta")!;
+    expect(meta.baseUrl).toBe("https://api.meta.ai/v1");
+    expect(meta.model).toBe("muse-spark-1.3-contributor");
   });
 
   test("existing profiles gain rea without touching saved connections", () => {

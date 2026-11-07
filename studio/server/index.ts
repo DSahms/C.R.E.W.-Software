@@ -205,6 +205,10 @@ const server = Bun.serve({
 
     "/api/studio/project/deliverables": safely(() => json(projectMgr.getDeliverables())),
 
+    "/api/studio/project/bundle": {
+      POST: safely(() => json(projectMgr.buildBundle())),
+    },
+
     "/api/studio/project/quality": {
       GET: safely(() => json(projectMgr.getQualityConfig())),
       POST: safely(async (req) => {
@@ -393,6 +397,7 @@ const server = Bun.serve({
           rawAttachment?: string;
           rawAttachmentName?: string;
           approvedBy: string;
+          initials: string;
           sections: { id: string; name: string }[];
           summary: {
             willHappen: string;
@@ -460,6 +465,13 @@ const server = Bun.serve({
       POST: safely(async req => {
         const body = await req.json() as { role: string; provider: string };
         return json(profiles.applyToAll(body.role, body.provider));
+      }),
+    },
+
+    "/api/studio/profiles/use-meta": {
+      POST: safely(async req => {
+        const body = await req.json() as { role: string };
+        return json(profiles.useMetaEverywhere(body.role));
       }),
     },
 

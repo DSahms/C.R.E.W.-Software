@@ -13,7 +13,7 @@ import { Database } from "bun:sqlite";
 
 const target = mkdtempSync(join(tmpdir(), "crew-core-"));
 const second = mkdtempSync(join(tmpdir(), "crew-second-"));
-const approvalInput = { specMarkdown: "# Goal\nA test", specTitle: "test", approvedBy: "test", sections: [{ id: "goal", name: "Goal" }], summary: { willHappen: "test", willUse: "stub", willNotDo: "calls", timeEstimate: "unknown", costEstimate: "none", canUndo: "yes", cannotUndo: "none" }, workflowId: "adw_plan.py", workflowName: "Plan", promptPreview: "test" };
+const approvalInput = { specMarkdown: "# Goal\nA test", specTitle: "test", approvedBy: "test", initials: "TE", sections: [{ id: "goal", name: "Goal" }], summary: { willHappen: "test", willUse: "stub", willNotDo: "calls", timeEstimate: "unknown", costEstimate: "none", canUndo: "yes", cannotUndo: "none" }, workflowId: "adw_plan.py", workflowName: "Plan", promptPreview: "test" };
 
 describe("case and credential isolation", () => {
   test("changing execution settings requires renewed approval", () => {
@@ -37,6 +37,15 @@ describe("case and credential isolation", () => {
     book.withdraw(a.id);
     expect(() => book.assertApproved(a.id, a.workflowId)).toThrow("withdrawn");
   });
+  test("missing or invalid initials block approval and execution", () => {
+    const book = new ApprovalBook(target);
+    expect(() => book.approve({ ...approvalInput, initials: "" })).toThrow("initials");
+    expect(() => book.approve({ ...approvalInput, initials: "X" })).toThrow("initials");
+    const tampered = book.approve(approvalInput);
+    const stored = book.get(tampered.id)!;
+    stored.initials = undefined;
+    expect(() => book.assertApproved(tampered.id, tampered.workflowId)).toThrow("Second sign-off");
+  });
   test("saved keys stay server-side and masked saves preserve them", () => {
     const store = new ProfileStore(target);
     const profile = { ...store.list().profiles[0], apiKey: "test-secret-not-real", model: "auto" };
@@ -47,13 +56,13 @@ describe("case and credential isolation", () => {
     store.setTargetDir(second);
     expect(store.list().profiles[0].apiKey).toBe("none");
   });
-  test("runtime uses the router and auto without putting keys in files", () => {
+  test("runtime uses the router and exact model without putting keys in files", () => {
     mkdirSync(join(target, "adws/adw_sssf_config"), { recursive: true });
     writeFileSync(join(target, "adws/adw_sssf_config/sssf.config.yaml"), "defaults:\n  model: example/model\nagents:\n  - name: planner\n    purpose: test\n    prompt_engineering: {system: x, user: y}\n");
     const store = new ProfileStore(target);
     const runtime = prepareRuntime(target, "runtime-test", store.list(), "adws/adw_sssf_config/sssf.config.yaml");
     const registry = readFileSync(runtime.env.PI_MODELS_PATH, "utf8");
-    expect(registry).toContain('"auto"');
+    expect(registry).toContain('"gpt-oss-120b"');
     expect(registry).not.toContain("test-secret-not-real");
     expect(runtime.env.CREW_KEY_PLANNER).toBe("test-secret-not-real");
   });
@@ -65,13 +74,13 @@ describe("case and credential isolation", () => {
     config.saveNamedRoster("Router roster", config.loadConfig().config);
     store.upsert({ ...original, model: "different-model" });
     config.applyRosterPreset("router_roster");
-    expect(new ProfileStore(target).list().profiles[0].model).toBe("auto");
+    expect(new ProfileStore(target).list().profiles[0].model).toBe("gpt-oss-120b");
   });
   test("new app projects inherit profiles and start with clean Git history", () => {
     const manager = new ProjectManager(target, target);
     const info = manager.createProject("isolated-app");
     expect(info.path).not.toBe(target);
-    expect(new ProfileStore(info.path).list().profiles[0].model).toBe("auto");
+    expect(new ProfileStore(info.path).list().profiles[0].model).toBe("gpt-oss-120b");
     expect(Bun.spawnSync(["git", "status", "--porcelain"], { cwd: info.path }).stdout.toString().trim()).toBe("");
     expect(() => manager.createProject("../escape")).toThrow();
   });
@@ -94,7 +103,7 @@ test("provider rejection records sanitized diagnostics and is not retried", asyn
   } finally { stub.stop(true); }
 });
 
-test("real interview transport preserves auto, readiness, and saved progress", async () => {
+test("real interview transport preserves exact model, readiness, and saved progress", async () => {
   let model = "";
   const mock = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(req) {
     model = (await req.json() as any).model;
@@ -102,10 +111,10 @@ test("real interview transport preserves auto, readiness, and saved progress", a
   } });
   try {
     const store = new ProfileStore(second);
-    store.upsert({ ...store.list().profiles.find(p => p.role === "interviewer")!, baseUrl: `http://127.0.0.1:${mock.port}/v1`, model: "auto" });
+    store.upsert({ ...store.list().profiles.find(p => p.role === "interviewer")!, baseUrl: `http://127.0.0.1:${mock.port}/v1`, model: "gpt-oss-120b" });
     const engine = new DiscoveryEngine(second);
     const state = await engine.analyzeDescription("Create a demo with one button.");
-    expect(model).toBe("auto");
+    expect(model).toBe("gpt-oss-120b");
     expect(state.ready).toBe(true);
     expect(new DiscoveryEngine(second).getCurrentSession().title).toBe("Demo");
     engine.updateSpecMarkdown("Changed goal");

@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import {
-  ArrowRight, Clipboard, FileUp, FileText, HelpCircle, History,
-  Lightbulb, MessageSquare, RotateCcw, Save, Send, Sparkles, Upload, X,
+  ArrowRight, Clipboard, FileUp, FileText, History,
+  MessageSquare, Save, Sparkles, Upload,
 } from "lucide-vue-next";
 import ScreenHeader from "@/components/ScreenHeader.vue";
 import type {
@@ -55,13 +55,15 @@ function toggleVoice() {
 }
 onUnmounted(() => { voice?.stop(); if (saveTimer) clearTimeout(saveTimer); saveDraft(); });
 
-// 3 intake modes
-const mode = ref<"talk" | "upload" | "paste">("talk");
+// 4 intake modes: talk, upload, paste, plus existing (point at software for REA)
+const mode = ref<"talk" | "upload" | "paste" | "existing">("talk");
 const talkText = ref("");
 const pasteText = ref("");
 const uploadedFileName = ref<string>("");
 const uploadedFileText = ref<string>("");
 const uploadInput = ref<HTMLInputElement | null>(null);
+const existingTarget = ref("");
+const existingQuestion = ref("");
 
 // Examples
 const EXAMPLES: string[] = [
@@ -82,6 +84,8 @@ function saveDraft() {
     mode: mode.value,
     talk: talkText.value,
     paste: pasteText.value,
+    existingTarget: existingTarget.value,
+    existingQuestion: existingQuestion.value,
     uploadedFileName: uploadedFileName.value,
     uploadedFileText: uploadedFileText.value,
     specMarkdown: session.value?.specMarkdown ?? "",
@@ -99,10 +103,12 @@ function loadDraft(): boolean {
   if (!raw) return false;
   try {
     const d = JSON.parse(raw);
-    if (!d || (!d.talk && !d.paste && !d.uploadedFileText)) return false;
+    if (!d || (!d.talk && !d.paste && !d.uploadedFileText && !d.existingTarget)) return false;
     mode.value = d.mode ?? "talk";
     talkText.value = d.talk ?? "";
     pasteText.value = d.paste ?? "";
+    existingTarget.value = d.existingTarget ?? "";
+    existingQuestion.value = d.existingQuestion ?? "";
     uploadedFileName.value = d.uploadedFileName ?? "";
     uploadedFileText.value = d.uploadedFileText ?? "";
     draftSavedAt.value = d.savedAt;
@@ -136,14 +142,25 @@ onMounted(async () => {
 });
 
 // Watch for autosave on text changes
-watch([talkText, pasteText, uploadedFileText, uploadedFileName, mode], () => {
+watch([talkText, pasteText, uploadedFileText, uploadedFileName, existingTarget, existingQuestion, mode], () => {
   scheduleSave();
+});
+
+const existingInput = computed(() => {
+  const bits: string[] = [];
+  if (existingQuestion.value.trim()) bits.push(existingQuestion.value.trim());
+  if (existingTarget.value.trim()) {
+    bits.push(`Investigate the existing software at this absolute local path (static inspection only, change nothing): ${existingTarget.value.trim()}`);
+    bits.push('```crew-rea\n{"question": ' + JSON.stringify(existingQuestion.value.trim() || "What does this software do and how is it structured?") + ', "target": ' + JSON.stringify(existingTarget.value.trim()) + ', "scope": "static inspection of only that target", "permitted_actions": "static-local"}\n```');
+  }
+  return bits.join("\n\n");
 });
 
 const currentInput = computed(() => {
   if (mode.value === "talk") return talkText.value;
   if (mode.value === "paste") return pasteText.value;
   if (mode.value === "upload") return uploadedFileText.value;
+  if (mode.value === "existing") return existingInput.value;
   return "";
 });
 
@@ -166,20 +183,49 @@ function handleUploadClick() {
   uploadInput.value?.click();
 }
 
+const SUPPORTED_UPLOAD_RE = /\.(md|markdown|txt|text|pdf|doc|docx|rtf|csv|json|yaml|yml|jpg|jpeg|png|gif|webp|bmp|svg|heic|heif|tif|tiff)$/i;
+
+function isImageName(name: string): boolean {
+  return /\.(jpg|jpeg|png|gif|webp|bmp|svg|heic|heif|tif|tiff)$/i.test(name);
+}
+
 async function handleFileChosen(ev: Event) {
   const input = ev.target as HTMLInputElement;
   const file = input.files?.[0];
   if (!file) return;
-  // .md or text only
-  const okExt = /\.(md|markdown|txt|text)$/i.test(file.name);
-  if (!okExt) {
-    alert("Please choose a .md or .txt file.");
+  if (!SUPPORTED_UPLOAD_RE.test(file.name)) {
+    alert("Attach markdown, text, Word, PDF, or an image (JPG, PNG, GIF, WebP, BMP, SVG, HEIC, TIFF).");
     input.value = "";
     return;
   }
-  const text = await file.text();
+  if (file.size > 8 * 1024 * 1024) {
+    alert("That file is over 8 MB. Attach a smaller file or paste the key text instead.");
+    input.value = "";
+    return;
+  }
+  // Images attach as visual context; the interview reads text only for now.
+  if (isImageName(file.name) || file.type.startsWith("image/")) {
+    uploadedFileName.value = file.name;
+    uploadedFileText.value = `[image attached: ${file.name} — ${(file.size / 1024).toFixed(0)} KB]\nDescribe what this image shows in the box below, or keep it as visual context for the interview.`;
+    mode.value = "upload";
+    saveDraft();
+    return;
+  }
+  let text = "";
+  try {
+    text = await file.text();
+  } catch {
+    alert("Could not read that file as text. Paste the key text instead.");
+    input.value = "";
+    return;
+  }
+  if (!text.trim()) {
+    alert("That file has no readable text (scanned PDFs and Word exports often don't). Paste the key text or describe the image instead.");
+    input.value = "";
+    return;
+  }
   uploadedFileName.value = file.name;
-  uploadedFileText.value = text;
+  uploadedFileText.value = text.slice(0, 200000);
   mode.value = "upload";
   saveDraft();
 }
@@ -277,20 +323,18 @@ const fmtTime = (iso: string | null) => {
 
 <template>
   <div>
-    <ScreenHeader screen="new-job">
-      <template #actions>
-        <button class="btn btn-ghost btn-sm" @click="doResetSession" title="Reset session">
-          <RotateCcw :size="14" /> Reset
-        </button>
-        <button class="btn btn-primary" :disabled="!hasSpec" @click="continueToReview" data-tour="new-job-continue">
-          Continue
-          <ArrowRight :size="14" />
-        </button>
-      </template>
-    </ScreenHeader>
+    <ScreenHeader screen="new-job" />
+    <!-- 5-step ladder: 1 Describe (here), 2 Answer (interview), 3 Check (review), 4 Sign twice, 5 Run + zip. -->
+    <ol class="ladder" aria-label="The 5 steps from idea to finished bundle">
+      <li class="ladder-step current" aria-current="step"><strong>1 · Describe</strong><span>— you are here. Pick a way to tell us below.</span></li>
+      <li class="ladder-step"><strong>2 · Answer</strong><span>— the interviewer asks short numbered questions.</span></li>
+      <li class="ladder-step"><strong>3 · Check</strong><span>— read the spec back in Review.</span></li>
+      <li class="ladder-step"><strong>4 · Sign twice</strong><span>— first sign, then initials. Both stay on this machine.</span></li>
+      <li class="ladder-step"><strong>5 · Run + zip</strong><span>— Crew builds it; Results packs one zip to take home.</span></li>
+    </ol>
     <div class="section-card" style="margin-bottom: 14px">
       <button class="btn btn-secondary" :disabled="!VoiceRecognition" @click="toggleVoice">{{ listening ? "Stop listening" : "Use microphone" }}</button>
-      <span class="dim"> {{ VoiceRecognition ? "Review your dictated words before sending. Your browser may use an external speech service." : "Voice input is unavailable in this browser; Paste and Upload remain available." }}</span>
+      <span class="dim"> {{ VoiceRecognition ? "Review your dictated words before sending. Your browser may use an external speech service. Win+H dictation also works right into the box below." : "Voice input is unavailable in this browser — press Win+H to dictate into the box, or use Paste and Upload." }}</span>
     </div>
 
     <!-- Draft chip. Kept in the layout even when empty: inserting it on blur
@@ -307,25 +351,30 @@ const fmtTime = (iso: string | null) => {
       <span v-else>Draft not saved yet</span>
     </div>
 
-    <!-- 3 intake mode cards -->
+    <!-- 4 numbered front doors: the owner asked for a visible 1-2-3 within step 1. -->
     <div class="mode-grid" role="tablist" aria-label="Intake mode">
       <button class="mode-card" :class="{ active: mode === 'talk' }" @click="mode = 'talk'" data-tour="new-job-talk" role="tab">
         <MessageSquare :size="18" />
-        <div class="mode-name">Talk it through</div>
-        <div class="mode-desc">Describe what you want in plain words. No format required.</div>
+        <div class="mode-name">1 · Talk it through</div>
+        <div class="mode-desc">Describe what you want in plain words. Dictate with Win+H or type. No format required.</div>
       </button>
       <button class="mode-card" :class="{ active: mode === 'upload' }" @click="handleUploadClick" data-tour="new-job-upload" role="tab">
         <FileUp :size="18" />
-        <div class="mode-name">Upload a file</div>
-        <div class="mode-desc">Pick a <code>.md</code> or <code>.txt</code> file from your machine.</div>
+        <div class="mode-name">2 · Dump what you have</div>
+        <div class="mode-desc">Markdown, text, Word, PDF, or images — drawings, scans, screenshots. Click to pick a file. Everything helps.</div>
       </button>
       <button class="mode-card" :class="{ active: mode === 'paste' }" @click="mode = 'paste'" data-tour="new-job-paste" role="tab">
         <Clipboard :size="18" />
-        <div class="mode-name">Paste text</div>
-        <div class="mode-desc">Use the Paste button to drop text straight from the clipboard.</div>
+        <div class="mode-name">3 · Paste text</div>
+        <div class="mode-desc">Use the Paste button to drop text straight from the clipboard. No typing needed.</div>
+      </button>
+      <button class="mode-card" :class="{ active: mode === 'existing' }" @click="mode = 'existing'" data-tour="new-job-existing" role="tab">
+        <History :size="18" />
+        <div class="mode-name">4 · Point at software</div>
+        <div class="mode-desc">Name an app or folder. REA inspects it read-only for a head start — or continue without it.</div>
       </button>
     </div>
-    <input ref="uploadInput" type="file" accept=".md,.markdown,.txt,.text" style="display:none" @change="handleFileChosen" />
+    <input ref="uploadInput" type="file" accept=".md,.markdown,.txt,.text,.pdf,.doc,.docx,.rtf,.csv,.json,.yaml,.yml,.jpg,.jpeg,.png,.gif,.webp,.bmp,.svg,.heic,.heif,.tif,.tiff" style="display:none" @change="handleFileChosen" />
 
     <!-- Active mode input -->
     <div class="section-card" style="margin-top: 14px;">
@@ -342,11 +391,11 @@ const fmtTime = (iso: string | null) => {
 
       <!-- UPLOAD -->
       <div v-else-if="mode === 'upload'">
-        <div class="section-label">Upload a file</div>
+        <div class="section-label">Dump what you have</div>
         <div v-if="!uploadedFileName" class="upload-zone" @click="handleUploadClick">
           <Upload :size="22" />
-          <div>Click to choose a <code>.md</code> or <code>.txt</code> file</div>
-          <div class="dim" style="font-size: 12px;">The file stays on your machine. Only its text is read.</div>
+          <div>Click to attach markdown, text, Word, PDF, or images</div>
+          <div class="dim" style="font-size: 12px;">The file stays on your machine. Text is read; images ride along as visual context.</div>
         </div>
         <div v-else class="upload-done">
           <FileText :size="16" />
@@ -354,6 +403,31 @@ const fmtTime = (iso: string | null) => {
           <span class="dim">— {{ uploadedFileText.length.toLocaleString() }} chars</span>
           <button class="btn btn-ghost btn-xs" @click="clearUpload">Remove</button>
         </div>
+      </div>
+
+      <!-- EXISTING SOFTWARE (REA front door) -->
+      <div v-else-if="mode === 'existing'">
+        <div class="section-label">Point at existing software</div>
+        <p class="dim" style="margin: 0 0 10px; font-size: 13px;">
+          Name the app or folder you want to learn from — for example a network scanner like Fing, or a folder of legacy code.
+          REA inspects it read-only (static only, never runs it) and hands the interview a head start.
+          At Review you'll pick "Investigate, Then Build". If inspection can't run, you'll get a plain "continue without it" choice.
+        </p>
+        <div class="section-label">What do you want to learn from it?</div>
+        <textarea
+          v-model="existingQuestion"
+          rows="3"
+          placeholder="e.g. How does its network scan work, and what would a minimal clone need?"
+          @blur="saveDraft"
+        ></textarea>
+        <div class="section-label" style="margin-top: 10px;">Absolute local path to the app or folder</div>
+        <input
+          type="text"
+          v-model="existingTarget"
+          placeholder="e.g. D:\tools\fing or D:\legacy\scanner"
+          @blur="saveDraft"
+        />
+        <div class="dim" style="font-size: 12px; margin-top: 4px;">Must be a full path on this machine. Relative paths and network drives are rejected.</div>
       </div>
 
       <!-- PASTE -->
@@ -493,9 +567,9 @@ const fmtTime = (iso: string | null) => {
       ></textarea>
     </div>
 
-    <!-- Bottom action -->
+    <!-- Bottom action: the single primary button. Reset lives in the drawer. -->
     <div class="bottom-action">
-      <button class="btn btn-primary" :disabled="!hasSpec" @click="continueToReview">
+      <button class="btn btn-primary btn-lg" :disabled="!hasSpec" @click="continueToReview" data-tour="new-job-continue">
         Continue to Review &amp; Approve
         <ArrowRight :size="14" />
       </button>
@@ -516,8 +590,17 @@ const fmtTime = (iso: string | null) => {
   margin-bottom: 12px;
 }
 .draft-chip.empty { visibility: hidden; }
+.ladder {
+  list-style: none; margin: 0 0 14px; padding: 10px 14px;
+  display: flex; flex-wrap: wrap; gap: 6px 14px;
+  background: var(--panel); border: 1px solid var(--border-soft); border-radius: var(--radius-sm);
+  font-size: 12.5px; color: var(--dim);
+}
+.ladder-step { display: flex; gap: 4px; align-items: baseline; }
+.ladder-step.current { color: var(--text); }
+.ladder-step.current strong { color: var(--accent); }
 .mode-grid {
-  display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px;
 }
 .mode-card {
   display: flex; flex-direction: column; gap: 4px;
@@ -569,6 +652,9 @@ const fmtTime = (iso: string | null) => {
 
 .bottom-action { display: flex; align-items: center; gap: 12px; margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--border-soft); }
 
+@media (max-width: 1020px) {
+  .mode-grid { grid-template-columns: repeat(2, 1fr); }
+}
 @media (max-width: 768px) {
   .mode-grid { grid-template-columns: 1fr; }
   .readback-sections { grid-template-columns: 1fr; }

@@ -29,6 +29,19 @@ export interface NavState {
 
 export const nav = ref<NavState>({ screen: "home" });
 
+/** Five-step ladder the owner asked for: Describe, Answer, Check, Sign twice, Run + zip. */
+export const LADDER_LABELS = [
+  "Describe",
+  "Answer",
+  "Check",
+  "Sign twice",
+  "Run + zip",
+] as const;
+
+export function ladderLabel(step: number): string {
+  return LADDER_LABELS[step - 1] ?? LADDER_LABELS[0];
+}
+
 export const MAIN_FLOW: ScreenId[] = [
   "new-job",
   "review-approve",

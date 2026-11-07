@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import {
-  Compass, HelpCircle, LifeBuoy, ListChecks, PlayCircle, RotateCcw,
-  Settings as SettingsIcon, Sparkles, Sliders,
+  Compass, ListChecks, PlayCircle, RotateCcw, Sparkles,
 } from "lucide-vue-next";
 import ScreenHeader from "@/components/ScreenHeader.vue";
-import { startTour, hasFinishedTour, hasFinishedFirstRun } from "@/lib/tour";
+import {
+  startTour, hasFinishedTour, hasFinishedFirstRun,
+  hasFinishedSetupTour, hasFinishedJobTour,
+} from "@/lib/tour";
 import { getVersion } from "@/lib/api";
 import { go } from "@/lib/nav";
 import { onMounted, ref } from "vue";
@@ -19,6 +21,7 @@ const GLOSSARY: { term: string; def: string }[] = [
   { term: "Profile", def: "A saved model connection per role (base URL, model, key, reasoning level). Local is the default." },
   { term: "Local profile", def: "A connection to a service on this computer. It may be an LLM router that forwards requests to cloud models. Auto leaves model selection to that router." },
   { term: "Cloud profile", def: "Venice AI. Disabled until a VENICE_API_KEY is in .env. Never used in tests." },
+  { term: "Meta profile", def: "Your cheap endpoint at api.meta.ai with muse-spark-1.3-contributor. Paste your META_API_KEY once in Settings; it stays on this machine." },
   { term: "Token cap", def: "Crew stops when reported usage reaches this threshold. Reporting can lag; this is not an exact spending ceiling." },
 ];
 
@@ -42,7 +45,7 @@ onMounted(async () => {
 
 <template>
   <div>
-    <ScreenHeader screen="help" hide-step />
+    <ScreenHeader screen="help" />
     <div class="section-card">
       <a class="btn btn-secondary" href="/manuals/users-manual/index.html" target="_blank" rel="noopener">User's Manual</a>
       <a class="btn btn-secondary" href="/manuals/learners-manual/index.html" target="_blank" rel="noopener">Learner's Manual</a>
@@ -53,21 +56,28 @@ onMounted(async () => {
 
     <div class="help-cols">
       <div class="section-card">
-        <div class="section-label">Tours</div>
-        <button class="btn btn-secondary" style="width:100%; justify-content: flex-start; margin-bottom: 8px;" @click="startTour('main')">
+        <div class="section-label">Tours — both bubbles, anytime</div>
+        <button class="btn btn-secondary" style="width:100%; justify-content: flex-start; margin-bottom: 8px;" @click="startTour('setup')">
           <RotateCcw :size="16" />
-          Replay the main tour
+          Replay setup tour (models)
         </button>
-        <button class="btn btn-secondary" style="width:100%; justify-content: flex-start;" @click="startTour('firstrun')">
+        <button class="btn btn-secondary" style="width:100%; justify-content: flex-start; margin-bottom: 8px;" @click="startTour('job')">
           <Sparkles :size="16" />
-          Replay first-run setup
+          Replay job tour (Describe → Answer → Check → Sign twice → Run + zip)
+        </button>
+        <button class="btn btn-secondary" style="width:100%; justify-content: flex-start;" @click="startTour('main')">
+          <RotateCcw :size="16" />
+          Replay the classic walk-through
         </button>
         <p class="dim" style="font-size: 12.5px; margin-top: 10px;">
-          You can restart the tour at any time from this button, or the Help button in the top bar.
+          Both bubbles point at the fields they explain and never cover them. Restart either one here or from the Help button in the top bar.
         </p>
-        <p class="dim" style="font-size: 12.5px;">
-          Status: main tour {{ hasFinishedTour() ? "completed" : "not finished" }} · first-run {{ hasFinishedFirstRun() ? "completed" : "not finished" }}.
-        </p>
+        <details>
+          <summary class="dim" style="font-size: 12.5px; cursor: pointer;">Tour status</summary>
+          <p class="dim" style="font-size: 12.5px;">
+            Setup {{ hasFinishedSetupTour() ? "done" : "not finished" }} · job {{ hasFinishedJobTour() ? "done" : "not finished" }} · classic {{ hasFinishedTour() ? "done" : "not finished" }} · first-run {{ hasFinishedFirstRun() ? "done" : "not finished" }}.
+          </p>
+        </details>
       </div>
 
       <div class="section-card">
@@ -95,11 +105,9 @@ onMounted(async () => {
         <button class="where-card" @click="go('new-job')"><Compass :size="16" /> New Job — describe what you want</button>
         <button class="where-card" @click="go('review-approve')"><ListChecks :size="16" /> Review &amp; Approve — the gate</button>
         <button class="where-card" @click="go('run')"><PlayCircle :size="16" /> Run — live console + token guard</button>
-        <button class="where-card" @click="go('results')"><PlayCircle :size="16" /> Results — what changed</button>
-        <button class="where-card" @click="go('sessions')"><Sliders :size="16" /> Sessions — full trace</button>
-        <button class="where-card" @click="go('history')"><LifeBuoy :size="16" /> History — approval audit log</button>
-        <button class="where-card" @click="go('settings')"><SettingsIcon :size="16" /> Settings — connection profiles</button>
+        <button class="where-card" @click="go('results')"><PlayCircle :size="16" /> Results — take home the zip</button>
       </div>
+      <p class="dim" style="font-size: 12.5px; margin: 10px 0 0;">Sessions, History, and full Settings live under Controls in the top bar — the 5 steps above never need them.</p>
     </div>
   </div>
 </template>

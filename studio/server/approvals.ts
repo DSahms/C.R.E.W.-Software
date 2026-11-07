@@ -122,14 +122,20 @@ export class ApprovalBook {
     rawAttachment?: string;
     rawAttachmentName?: string;
     approvedBy: string;
+    initials: string;
     sections: { id: string; name: string }[];
     summary: ApprovalRecordV2["summary"];
     workflowId: string;
     workflowName: string;
     promptPreview: string;
   }): ApprovalRecordV2 {
+    const initials = (input.initials ?? "").trim();
+    if (initials.length < 2 || initials.length > 8 || !/^[A-Za-z][A-Za-z.'-]*$/.test(initials)) {
+      throw new Error("Type your initials (2-8 letters) to complete the second sign-off.");
+    }
     const hash = ApprovalBook.hashSpec(input.specMarkdown);
     const version = this.latestVersionForTitle(input.specTitle) + 1;
+    const now = new Date().toISOString();
 
     const record: ApprovalRecordV2 = {
       executionHash: this.executionHash(),
@@ -141,7 +147,9 @@ export class ApprovalBook {
       rawAttachment: input.rawAttachment,
       rawAttachmentName: input.rawAttachmentName,
       approvedBy: input.approvedBy,
-      approvedAt: new Date().toISOString(),
+      approvedAt: now,
+      initials,
+      initialsAt: now,
       sections: input.sections.map((s) => ({
         id: s.id,
         name: s.name,
@@ -199,6 +207,10 @@ export class ApprovalBook {
       );
     }
     if (r.executionHash !== this.executionHash()) throw new Error("Connection or roster settings changed after approval. Review and approve the job again.");
+    // Both sign-off legs required: sections + final confirm, then initials.
+    if (!r.initials || !r.initialsAt) {
+      throw new Error("Second sign-off missing. Type your initials on the Review screen to complete approval.");
+    }
     // All sections must be confirmed.
     const unconfirmed = r.sections.filter((s) => !s.confirmed);
     if (unconfirmed.length > 0) {

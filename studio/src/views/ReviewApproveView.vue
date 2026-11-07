@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
 import {
-  ArrowLeft, ArrowRight, Check, CheckCircle2, Clock, ListChecks,
+  ArrowRight, Check, CheckCircle2, Clock, ListChecks,
   ShieldCheck, ShieldAlert, Zap, Undo2, AlertTriangle,
 } from "lucide-vue-next";
 import ScreenHeader from "@/components/ScreenHeader.vue";
@@ -35,8 +35,11 @@ const summary = ref({
   cannotUndo: "",
 });
 
-// The final approval checkbox (in words)
+// The final approval checkbox (in words) — leg 1 of two sign-offs
 const finalConfirm = ref(false);
+
+// Initials — leg 2 of two sign-offs. Required before any run starts.
+const initials = ref("");
 
 // Recorded approval (after the user approves)
 const recordedApproval = ref<ApprovalRecordV2 | null>(null);
@@ -53,8 +56,13 @@ onMounted(async () => {
     workflows.value = wfs;
     existingApprovalsList.value = aps;
     if (wfs.length) {
-      const recommended = wfs.find(w => w.badge === "Recommended") ?? wfs[0];
-      selectedWorkflowId.value = recommended.id;
+      const reaRequested = /```crew-rea[\s\S]*?```/.test(sess.specMarkdown ?? "") || /```crew-rea[\s\S]*?```/.test(sess.rawInput ?? "");
+      const inv = wfs.find(w => w.id === "adw_simple_sdlc_rea.py");
+      if (reaRequested && inv) selectedWorkflowId.value = inv.id;
+      else {
+        const recommended = wfs.find(w => w.badge === "Recommended") ?? wfs[0];
+        selectedWorkflowId.value = recommended.id;
+      }
     }
     parseSections(sess.specMarkdown);
     prefillSummary(sess);
@@ -134,6 +142,10 @@ async function handleApprove() {
     alert("Tick the box that says you've reviewed this and you're ready to run it.");
     return;
   }
+  if (initials.value.trim().length < 2) {
+    alert("Type your initials to complete the second sign-off.");
+    return;
+  }
   approving.value = true;
   try {
     const text = currentInputText();
@@ -143,6 +155,7 @@ async function handleApprove() {
       rawAttachment: text || undefined,
       rawAttachmentName: uploadedFileNameRef.value || undefined,
       approvedBy: "Lead Engineer",  // could be configurable; no typing required by user
+      initials: initials.value.trim(),
       sections: sectionsList.value,
       summary: summary.value,
       workflowId: selectedWorkflowId.value,
@@ -176,6 +189,7 @@ async function handleWithdraw() {
     await withdrawApproval(recordedApproval.value.id);
     recordedApproval.value = null;
     finalConfirm.value = false;
+    initials.value = "";
   } catch (e: any) { alert(e.message); }
 }
 
@@ -204,25 +218,12 @@ async function toggleSection(sectionId: string) {
 
 <template>
   <div>
-    <ScreenHeader screen="review-approve">
-      <template #actions>
-        <button class="btn btn-ghost btn-sm" @click="backToNewJob">
-          <ArrowLeft :size="14" /> Back to New Job
-        </button>
-      </template>
-    </ScreenHeader>
+    <ScreenHeader screen="review-approve" />
 
     <div v-if="loading" class="dim">Loading…</div>
 
     <template v-else-if="session">
-      <!-- Breadcrumb -->
-      <div class="breadcrumbs" aria-label="Breadcrumb">
-        <button @click="backToNewJob">New Job</button>
-        <span class="crumb-sep">›</span>
-        <span class="crumb-current">Review &amp; Approve</span>
-      </div>
-
-      <!-- Already-approved banner -->
+      <!-- Already-approved: one forward path, withdraw as a quiet link. -->
       <div v-if="recordedApproval" class="callout" :class="{ warn: recordedApproval.withdrawnAt }" style="margin-bottom: 14px;">
         <CheckCircle2 v-if="!recordedApproval.withdrawnAt" :size="16" style="vertical-align: middle; margin-right: 6px;" />
         <ShieldAlert v-else :size="16" style="vertical-align: middle; margin-right: 6px;" />
@@ -230,23 +231,23 @@ async function toggleSection(sectionId: string) {
           Approved v{{ recordedApproval.specVersion }} by {{ recordedApproval.approvedBy }} on {{ new Date(recordedApproval.approvedAt).toLocaleString() }}.
         </strong>
         <strong v-else>This approval was withdrawn.</strong>
-        Workflow: {{ recordedApproval.workflowName }}
-        <div style="margin-top: 8px; display: flex; gap: 8px;">
-          <button v-if="!recordedApproval.withdrawnAt" class="btn btn-secondary btn-sm" @click="handleWithdraw">
-            <Undo2 :size="14" /> Withdraw approval
-          </button>
-          <button v-if="!recordedApproval.withdrawnAt" class="btn btn-primary btn-sm" @click="continueToRun" data-tour="review-continue">
+        {{ recordedApproval.workflowName }}
+        <div style="margin-top: 8px; display: flex; gap: 8px; align-items: center;">
+          <button v-if="!recordedApproval.withdrawnAt" class="btn btn-primary" @click="continueToRun" data-tour="review-continue">
             Continue to Run <ArrowRight :size="14" />
           </button>
-          <button v-else class="btn btn-primary btn-sm" @click="recordedApproval = null">
+          <button v-else class="btn btn-primary" @click="recordedApproval = null">
             Re-approve
+          </button>
+          <button v-if="!recordedApproval.withdrawnAt" class="btn btn-ghost btn-xs" @click="handleWithdraw">
+            <Undo2 :size="12" /> Withdraw
           </button>
         </div>
       </div>
 
       <!-- Step 1: per-section confirmation -->
       <div class="section-card">
-        <div class="section-label">Step 1 of 3 — confirm each section</div>
+        <div class="section-label">Step 3a — Check: confirm each section</div>
         <p class="dim" style="margin: 0 0 12px; font-size: 13px;">
           Each section of your spec is listed below. Tick the box to confirm you've read it. You can undo any check.
         </p>
@@ -272,7 +273,7 @@ async function toggleSection(sectionId: string) {
 
       <!-- Step 2: workflow choice + plain-language summary -->
       <div class="section-card" style="margin-top: 14px;">
-        <div class="section-label">Step 2 of 3 — what will happen</div>
+        <div class="section-label">Step 3b — Check: what will happen</div>
 
         <div class="sum-row">
           <div class="sum-label">Workflow</div>
@@ -319,17 +320,38 @@ async function toggleSection(sectionId: string) {
         </div>
       </div>
 
-      <!-- Step 3: final approval -->
+      <!-- Step 3: first sign-off -->
       <div class="section-card" style="margin-top: 14px;">
-        <div class="section-label">Step 3 of 3 — final approval</div>
+        <div class="section-label">Step 4a — Sign twice (1 of 2): first sign-off</div>
         <div class="final-approval">
           <label class="final-check">
             <input type="checkbox" v-model="finalConfirm" :disabled="!allSectionsConfirmed || !!recordedApproval" />
             <span>I have reviewed this and I'm ready to run it. The record of who approved, when, and which version will be saved.</span>
           </label>
+        </div>
+      </div>
+
+      <!-- Step 4: second sign-off with initials -->
+      <div class="section-card" style="margin-top: 14px;">
+        <div class="section-label">Step 4b — Sign twice (2 of 2): type your initials</div>
+        <p class="dim" style="margin: 0 0 10px; font-size: 13px;">
+          Two sign-offs are required before anything runs. The checkbox above is the first. Your initials are the second. Type 2–8 letters.
+        </p>
+        <div class="final-approval">
+          <label class="sum-label" for="approval-initials">Initials</label>
+          <input
+            id="approval-initials"
+            type="text"
+            v-model="initials"
+            maxlength="8"
+            autocomplete="off"
+            :disabled="!!recordedApproval"
+            placeholder="e.g. DS"
+            style="max-width: 160px;"
+          />
           <button
             class="btn btn-primary"
-            :disabled="!allSectionsConfirmed || !finalConfirm || approving || !!recordedApproval"
+            :disabled="!allSectionsConfirmed || !finalConfirm || initials.trim().length < 2 || approving || !!recordedApproval"
             @click="handleApprove"
             data-tour="review-approve-btn"
           >
@@ -337,8 +359,11 @@ async function toggleSection(sectionId: string) {
             {{ approving ? "Recording…" : "Approve and continue" }}
           </button>
         </div>
+        <div v-if="recordedApproval?.initials" class="dim" style="font-size: 12.5px; margin-top: 8px;">
+          Signed with initials {{ recordedApproval.initials }} on {{ recordedApproval.initialsAt ? new Date(recordedApproval.initialsAt).toLocaleString() : "" }}.
+        </div>
         <p class="dim" style="font-size: 12.5px; margin-top: 8px;">
-          No typing required for approval. The checkbox is in words. A run can never start without a recorded approval — this is enforced by the server, not just this screen.
+          A run can never start without both sign-offs — this is enforced by the server, not just this screen.
         </p>
       </div>
     </template>
